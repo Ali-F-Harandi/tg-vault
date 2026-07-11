@@ -1,337 +1,179 @@
-<!-- tg-vault web app -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>tg-vault — Telegram Cloud Storage</title>
-  <meta name="description" content="Use Telegram as cloud storage using only Bot API tokens. No phone number, no api_id/api_hash. All client-side.">
   <style>
-    /* ─────────────── Reset & Base ─────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0d1117;
-      --bg-elev: #161b22;
-      --bg-elev-2: #1f2630;
-      --border: #30363d;
-      --text: #e6edf3;
-      --text-muted: #8b949e;
-      --accent: #2f81f7;
-      --accent-hover: #4493f8;
-      --success: #3fb950;
-      --warning: #d29922;
-      --danger: #f85149;
+      --bg: #0d1117; --bg-elev: #161b22; --bg-elev-2: #1f2630;
+      --border: #30363d; --text: #e6edf3; --text-muted: #8b949e;
+      --accent: #2f81f7; --accent-hover: #4493f8;
+      --success: #3fb950; --warning: #d29922; --danger: #f85149;
       --radius: 6px;
-      --shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     html, body {
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      min-height: 100vh;
+      font-size: 14px; line-height: 1.5; min-height: 100vh;
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    code {
-      background: var(--bg-elev-2);
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      font-size: 0.9em;
-    }
-    /* ─────────────── Layout ─────────────── */
-    .container { max-width: 960px; margin: 0 auto; padding: 24px 20px 80px; }
+    code { background: var(--bg-elev-2); padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 0.9em; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
     header { text-align: center; margin-bottom: 32px; }
-    header h1 {
-      font-size: 32px;
-      font-weight: 600;
-      letter-spacing: -0.5px;
-      margin-bottom: 8px;
-    }
-    header h1 .icon { margin-right: 8px; }
+    header h1 { font-size: 32px; font-weight: 600; letter-spacing: -0.5px; margin-bottom: 8px; }
     header p { color: var(--text-muted); font-size: 16px; }
     .badges { margin-top: 12px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
-    .badge {
-      display: inline-block;
-      padding: 2px 10px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-    /* ─────────────── Tabs ─────────────── */
-    nav.tabs {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 24px;
-      overflow-x: auto;
-    }
+    .badge { display: inline-block; padding: 2px 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 12px; color: var(--text-muted); }
+    nav.tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
     nav.tabs button {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      padding: 12px 20px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      border-bottom: 2px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
+      background: none; border: none; color: var(--text-muted);
+      padding: 12px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
+      border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
     }
     nav.tabs button:hover { color: var(--text); }
-    nav.tabs button.active {
-      color: var(--text);
-      border-bottom-color: var(--accent);
-    }
+    nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
     .tab-content { display: none; animation: fadeIn 0.2s ease; }
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    /* ─────────────── Forms ─────────────── */
     .form-group { margin-bottom: 16px; }
-    label {
-      display: block;
-      margin-bottom: 6px;
-      font-weight: 500;
-      color: var(--text);
+    label { display: block; margin-bottom: 6px; font-weight: 500; }
+    .label-hint { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; font-weight: normal; }
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      width: 100%; padding: 8px 12px; background: var(--bg-elev);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      color: var(--text); font-size: 14px; font-family: inherit;
     }
-    .label-hint {
-      display: block;
-      margin-top: 2px;
-      color: var(--text-muted);
-      font-size: 12px;
-      font-weight: normal;
-    }
-    input[type="text"], input[type="password"], textarea {
-      width: 100%;
-      padding: 8px 12px;
-      background: var(--bg-elev);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text);
-      font-size: 14px;
-      font-family: inherit;
-    }
-    input:focus, textarea:focus {
-      outline: none;
-      border-color: var(--accent);
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(47, 129, 247, 0.15);
     }
-    textarea { resize: vertical; min-height: 60px; font-family: inherit; }
     .btn {
-      display: inline-block;
-      padding: 8px 16px;
-      background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: var(--radius);
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      transition: background 0.15s;
+      display: inline-block; padding: 8px 16px; background: var(--accent);
+      color: white; border: none; border-radius: var(--radius); cursor: pointer;
+      font-size: 14px; font-weight: 500; transition: background 0.15s;
     }
     .btn:hover { background: var(--accent-hover); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-secondary {
-      background: var(--bg-elev);
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
+    .btn-secondary { background: var(--bg-elev); border: 1px solid var(--border); color: var(--text); }
     .btn-secondary:hover { background: var(--bg-elev-2); }
     .btn-danger { background: var(--danger); }
-    .btn-danger:hover { background: #ff6b63; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
     .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-    /* ─────────────── Cards & Boxes ─────────────── */
-    .card {
-      background: var(--bg-elev);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px;
-      margin-bottom: 16px;
-    }
-    .card h2 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .alert {
-      padding: 10px 14px;
-      border-radius: var(--radius);
-      margin-bottom: 12px;
-      font-size: 13px;
-      border-left: 3px solid;
-    }
+    .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+    .alert { padding: 10px 14px; border-radius: var(--radius); margin-bottom: 12px; font-size: 13px; border-left: 3px solid; }
     .alert-info { background: rgba(47, 129, 247, 0.1); border-color: var(--accent); }
     .alert-success { background: rgba(63, 185, 80, 0.1); border-color: var(--success); }
     .alert-warning { background: rgba(210, 153, 34, 0.1); border-color: var(--warning); }
     .alert-danger { background: rgba(248, 81, 73, 0.1); border-color: var(--danger); }
     .hidden { display: none !important; }
-    /* ─────────────── Drop zone ─────────────── */
-    .dropzone {
-      border: 2px dashed var(--border);
-      border-radius: var(--radius);
-      padding: 40px 20px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .dropzone:hover, .dropzone.dragover {
-      border-color: var(--accent);
-      background: rgba(47, 129, 247, 0.05);
-    }
+    .dropzone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 40px 20px; text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+    .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: rgba(47, 129, 247, 0.05); }
     .dropzone .icon { font-size: 32px; margin-bottom: 8px; }
     .dropzone p { color: var(--text-muted); }
-    .dropzone .filename {
-      margin-top: 8px;
-      color: var(--text);
-      font-weight: 500;
-    }
-    /* ─────────────── Progress ─────────────── */
-    .progress {
-      width: 100%;
-      height: 8px;
-      background: var(--bg-elev-2);
-      border-radius: 4px;
-      overflow: hidden;
-      margin: 12px 0;
-    }
-    .progress-bar {
-      height: 100%;
-      background: var(--accent);
-      transition: width 0.3s ease;
-    }
-    .progress-text {
-      font-size: 12px;
-      color: var(--text-muted);
-      display: flex;
-      justify-content: space-between;
-    }
-    /* ─────────────── Info table ─────────────── */
-    .info-table { width: 100%; border-collapse: collapse; }
-    .info-table td {
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-    }
-    .info-table td:first-child {
-      color: var(--text-muted);
-      width: 140px;
-      font-weight: 500;
-    }
-    .info-table td:last-child {
-      word-break: break-all;
-      font-family: ui-monospace, monospace;
-      font-size: 13px;
-    }
-    /* ─────────────── Log ─────────────── */
-    .log {
-      background: var(--bg-elev-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 12px;
-      margin-top: 12px;
-      max-height: 200px;
-      overflow-y: auto;
-      font-family: ui-monospace, monospace;
-      font-size: 12px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      color: var(--text-muted);
-    }
+    .progress { width: 100%; height: 8px; background: var(--bg-elev-2); border-radius: 4px; overflow: hidden; margin: 12px 0; }
+    .progress-bar { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+    .progress-text { font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+    th { color: var(--text-muted); font-weight: 500; cursor: pointer; user-select: none; }
+    th:hover { color: var(--text); }
+    th.sorted::after { content: ' ▼'; font-size: 10px; }
+    th.sorted.asc::after { content: ' ▲'; font-size: 10px; }
+    tr:hover { background: var(--bg-elev-2); }
+    td.id { color: var(--text-muted); font-family: monospace; width: 40px; }
+    td.name { word-break: break-all; }
+    td.size, td.parts { text-align: right; font-family: monospace; }
+    td.link { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.actions { white-space: nowrap; }
+    .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: end; }
+    .filter-row .form-group { margin-bottom: 0; flex: 1; min-width: 120px; }
+    .filter-row .form-group label { font-size: 11px; color: var(--text-muted); }
+    .log { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-top: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; color: var(--text-muted); }
     .log-line { margin: 0; }
     .log-line.success { color: var(--success); }
     .log-line.error { color: var(--danger); }
     .log-line.warn { color: var(--warning); }
-    /* ─────────────── Footer ─────────────── */
-    footer {
-      text-align: center;
-      margin-top: 60px;
-      padding-top: 20px;
-      border-top: 1px solid var(--border);
-      color: var(--text-muted);
-      font-size: 12px;
-    }
-    footer a { color: var(--accent); }
-    /* ─────────────── Responsive ─────────────── */
-    @media (max-width: 600px) {
+    footer { text-align: center; margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+    .checkbox-group { display: flex; gap: 16px; flex-wrap: wrap; }
+    .checkbox-group label { display: flex; align-items: center; gap: 4px; font-weight: normal; cursor: pointer; }
+    @media (max-width: 700px) {
       .container { padding: 16px; }
       header h1 { font-size: 24px; }
       nav.tabs button { padding: 10px 14px; font-size: 13px; }
-      .info-table td:first-child { width: 100px; }
+      .filter-row { flex-direction: column; }
+      table { font-size: 12px; }
+      th, td { padding: 6px 8px; }
     }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <h1><span class="icon">📦</span> tg-vault</h1>
-      <p>Telegram cloud storage — fully client-side, no backend</p>
+      <h1>📦 tg-vault</h1>
+      <p>Telegram cloud storage — fully client-side</p>
       <div class="badges">
-        <span class="badge">🔒 Token never leaves your browser</span>
+        <span class="badge">🔒 Token in localStorage</span>
         <span class="badge">🤖 Bot API only</span>
-        <span class="badge">📁 No size limit (chunked)</span>
+        <span class="badge">🔐 AES-256-GCM</span>
+        <span class="badge">📦 gzip compression</span>
+        <span class="badge">🗄️ IndexedDB</span>
       </div>
     </header>
 
     <nav class="tabs" role="tablist">
-      <button data-tab="settings" class="active" role="tab">⚙️ Settings</button>
-      <button data-tab="upload" role="tab">📤 Upload</button>
-      <button data-tab="download" role="tab">📥 Download</button>
-      <button data-tab="info" role="tab">📋 Info</button>
+      <button data-tab="settings" class="active">⚙️ Settings</button>
+      <button data-tab="upload">📤 Upload</button>
+      <button data-tab="browse">🗄️ Browse & Download</button>
     </nav>
 
-    <!-- ═══════════════ Settings Tab ═══════════════ -->
+    <!-- Settings Tab -->
     <section id="tab-settings" class="tab-content active">
       <div class="card">
         <h2>⚙️ Configuration</h2>
-        <p style="color: var(--text-muted); margin-bottom: 16px;">
-          Your bot token and channel IDs are stored in <code>localStorage</code> in your browser only.
-          They are never sent to any server other than Telegram's Bot API.
-        </p>
         <div class="form-group">
           <label for="token">Bot Token</label>
-          <input type="password" id="token" placeholder="123456789:ABC-DEF..." autocomplete="off">
-          <span class="label-hint">Get one from <a href="https://t.me/BotFather" target="_blank">@BotFather</a> → /newbot</span>
+          <input type="password" id="token" placeholder="123456789:ABC-DEF...">
+          <span class="label-hint">Get one from <a href="https://t.me/BotFather" target="_blank">@BotFather</a></span>
         </div>
         <div class="form-group">
-          <label for="mainChannel">Main Channel ID</label>
-          <input type="text" id="mainChannel" placeholder="-1001234567890 or @channel_username">
-          <span class="label-hint">Private: <code>-100...</code> &nbsp; Public: <code>@username</code></span>
+          <label for="mainChannel">Main Channel ID (file storage)</label>
+          <input type="text" id="mainChannel" placeholder="-1001234567890 or @channel">
         </div>
         <div class="form-group">
-          <label for="tempChannel">Temp Channel ID <span style="color: var(--text-muted); font-weight: normal;">(optional)</span></label>
-          <input type="text" id="tempChannel" placeholder="Defaults to main channel if empty">
-          <span class="label-hint">Used for temporary forwarded messages during download</span>
+          <label for="tempChannel">Temp Channel ID (forwards + DB backup)</label>
+          <input type="text" id="tempChannel" placeholder="-1009876543210">
+          <span class="label-hint">Used for temp forwards during download AND for DB backup sync</span>
         </div>
         <div class="form-group">
-          <label for="chunkSize">Chunk Size (MB)</label>
-          <input type="text" id="chunkSize" value="19" placeholder="19">
-          <span class="label-hint">Must be ≤ 20 MB (Telegram getFile limit). Default: 19</span>
+          <label for="corsProxy">CORS Proxy URL <span style="color: var(--warning);">⚠️ Required for download</span></label>
+          <input type="text" id="corsProxy" value="https://proxy.cors.sh/" placeholder="https://proxy.cors.sh/">
+          <span class="label-hint">
+            Telegram's file download endpoint doesn't support CORS — a proxy is needed.<br>
+            <strong>Default (proxy.cors.sh):</strong> works out of the box, but proxy sees your token.<br>
+            <strong>Secure option:</strong> Deploy your own <a href="https://developers.cloudflare.com/workers/" target="_blank">Cloudflare Worker</a> (free, 2-min setup).
+          </span>
         </div>
         <div class="btn-row">
           <button class="btn" onclick="saveSettings()">💾 Save</button>
-          <button class="btn btn-secondary" onclick="testConnection()">🔌 Test Connection</button>
+          <button class="btn btn-secondary" onclick="testConnection()">🔌 Test</button>
           <button class="btn btn-danger" onclick="clearSettings()">🗑️ Clear</button>
         </div>
       </div>
+      <div id="settings-status"></div>
 
       <div class="card">
         <h2>📚 How to get a Channel ID</h2>
-        <p><strong>Method 1:</strong> Forward any message from your channel to <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> — it replies with the chat ID.</p>
-        <p style="margin-top: 8px;"><strong>Method 2:</strong> From a <code>t.me/c/1234567890/42</code> link → channel ID is <code>-1001234567890</code> (prepend <code>-100</code>).</p>
-        <p style="margin-top: 8px;"><strong>Method 3:</strong> Visit <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> in your browser after sending a message in your channel.</p>
-        <p style="margin-top: 12px; color: var(--text-muted);">
-          ⚠️ Your bot must be added as <strong>administrator</strong> in the channel with <strong>Post messages</strong> and <strong>Delete messages</strong> rights.
-        </p>
+        <p><strong>Method 1:</strong> Forward any message from your channel to <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a></p>
+        <p style="margin-top: 8px;"><strong>Method 2:</strong> From <code>t.me/c/1234567890/42</code> → channel ID is <code>-1001234567890</code></p>
+        <p style="margin-top: 12px; color: var(--text-muted);">⚠️ Bot must be admin with Post + Delete messages rights in both channels.</p>
       </div>
-
-      <div id="settings-status"></div>
     </section>
 
-    <!-- ═══════════════ Upload Tab ═══════════════ -->
+    <!-- Upload Tab -->
     <section id="tab-upload" class="tab-content">
       <div class="card">
         <h2>📤 Upload File</h2>
@@ -339,105 +181,204 @@
           <label>File</label>
           <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
             <div class="icon">📁</div>
-            <p>Click to select or drag &amp; drop a file here</p>
+            <p>Click or drag &amp; drop</p>
             <p class="filename hidden" id="filename"></p>
           </div>
           <input type="file" id="fileInput" class="hidden" onchange="onFileSelected(event)">
         </div>
         <div class="form-group">
-          <label for="desc">Description <span style="color: var(--text-muted); font-weight: normal;">(optional)</span></label>
-          <textarea id="desc" placeholder="A note about this file..."></textarea>
+          <label for="desc">Description (optional)</label>
+          <textarea id="desc" rows="2" placeholder="A note about this file..."></textarea>
         </div>
         <div class="form-group">
-          <label for="tags">Hashtags <span style="color: var(--text-muted); font-weight: normal;">(optional, comma-separated)</span></label>
+          <label for="tags">Hashtags (optional, comma-separated)</label>
           <input type="text" id="tags" placeholder="movies, sci-fi, 2026">
-          <span class="label-hint">Invalid chars are auto-sanitized (e.g. <code>sci-fi</code> → <code>sci_fi</code>)</span>
+        </div>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="encrypt"> 🔐 Encrypt (AES-256-GCM)</label>
+          <label><input type="checkbox" id="compress" checked> 📦 Compress (gzip)</label>
+        </div>
+        <div class="form-group hidden" id="passwordGroup">
+          <label for="encPassword">Encryption Password</label>
+          <input type="password" id="encPassword" placeholder="Password">
         </div>
         <button class="btn" id="uploadBtn" onclick="startUpload()" disabled>🚀 Upload</button>
       </div>
-
-      <div id="upload-progress" class="hidden">
-        <div class="card">
-          <h2>📊 Progress</h2>
-          <div class="progress">
-            <div class="progress-bar" id="uploadBar" style="width: 0%"></div>
-          </div>
-          <div class="progress-text">
-            <span id="uploadStatus">Preparing...</span>
-            <span id="uploadPercent">0%</span>
-          </div>
-          <div class="log" id="uploadLog"></div>
-        </div>
-      </div>
-
-      <div id="upload-result" class="hidden"></div>
+      <div id="upload-progress" class="hidden"></div>
+      <div id="upload-result"></div>
     </section>
 
-    <!-- ═══════════════ Download Tab ═══════════════ -->
-    <section id="tab-download" class="tab-content">
+    <!-- Browse & Download Tab -->
+    <section id="tab-browse" class="tab-content">
       <div class="card">
-        <h2>📥 Download File</h2>
-        <div class="form-group">
-          <label for="dlLink">Manifest Link</label>
-          <input type="text" id="dlLink" placeholder="https://t.me/c/1234567890/42">
-          <span class="label-hint">The link to the <strong>manifest</strong> message (last message of an upload)</span>
-        </div>
-        <button class="btn" id="downloadBtn" onclick="startDownload()">📥 Download</button>
-      </div>
-
-      <div id="download-progress" class="hidden">
-        <div class="card">
-          <h2>📊 Progress</h2>
-          <div class="progress">
-            <div class="progress-bar" id="downloadBar" style="width: 0%"></div>
+        <h2>🗄️ Database — Filter, Sort &amp; Download</h2>
+        <div class="filter-row">
+          <div class="form-group">
+            <label>Name contains</label>
+            <input type="text" id="fName" placeholder="e.g. eden" oninput="applyFilters()">
           </div>
-          <div class="progress-text">
-            <span id="downloadStatus">Preparing...</span>
-            <span id="downloadPercent">0%</span>
+          <div class="form-group">
+            <label>Tag</label>
+            <input type="text" id="fTag" placeholder="e.g. manga" oninput="applyFilters()">
           </div>
-          <div class="log" id="downloadLog"></div>
+          <div class="form-group">
+            <label>Min size (MB)</label>
+            <input type="number" id="fMinSize" placeholder="0" oninput="applyFilters()">
+          </div>
+          <div class="form-group">
+            <label>Max size (MB)</label>
+            <input type="number" id="fMaxSize" placeholder="999" oninput="applyFilters()">
+          </div>
+          <div class="form-group">
+            <label>Min parts</label>
+            <input type="number" id="fMinParts" placeholder="0" oninput="applyFilters()">
+          </div>
+          <div class="form-group">
+            <label>Max parts</label>
+            <input type="number" id="fMaxParts" placeholder="999" oninput="applyFilters()">
+          </div>
+        </div>
+        <div class="filter-row">
+          <div class="form-group">
+            <label>Status</label>
+            <select id="fStatus" onchange="applyFilters()">
+              <option value="uploaded">Uploaded</option>
+              <option value="">All</option>
+              <option value="deleted">Deleted</option>
+            </select>
+          </div>
+          <div class="checkbox-group" style="padding-top: 22px;">
+            <label><input type="checkbox" id="fEnc" onchange="applyFilters()"> 🔐 Only encrypted</label>
+            <label><input type="checkbox" id="fComp" onchange="applyFilters()"> 📦 Only compressed</label>
+          </div>
+          <div class="form-group" style="flex: 0;">
+            <label>&nbsp;</label>
+            <button class="btn btn-secondary btn-sm" onclick="resetFilters()">Reset</button>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span id="resultCount" style="color: var(--text-muted); font-size: 13px;"></span>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" onclick="downloadAllMatching()">📥 Download All Matching</button>
+            <button class="btn btn-secondary btn-sm" onclick="syncDBToTelegram()">☁️ Sync DB to Telegram</button>
+            <button class="btn btn-secondary btn-sm" onclick="restoreDBFromTelegram()">📥 Restore DB from Telegram</button>
+          </div>
+        </div>
+        <div style="overflow-x: auto;">
+          <table id="filesTable">
+            <thead>
+              <tr>
+                <th onclick="setSort('id')" data-sort="id">ID</th>
+                <th onclick="setSort('name')" data-sort="name">Name</th>
+                <th onclick="setSort('size')" data-sort="size">Size</th>
+                <th onclick="setSort('total_parts')" data-sort="total_parts">Parts</th>
+                <th onclick="setSort('encrypted')" data-sort="encrypted">Enc</th>
+                <th onclick="setSort('uploaded_at')" data-sort="uploaded_at">Date</th>
+                <th>Link</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="filesBody"></tbody>
+          </table>
         </div>
       </div>
-
-      <div id="download-result" class="hidden"></div>
-    </section>
-
-    <!-- ═══════════════ Info Tab ═══════════════ -->
-    <section id="tab-info" class="tab-content">
-      <div class="card">
-        <h2>📋 File Info</h2>
-        <div class="form-group">
-          <label for="infoLink">Manifest Link</label>
-          <input type="text" id="infoLink" placeholder="https://t.me/c/1234567890/42">
-        </div>
-        <button class="btn" onclick="showInfo()">📋 Show Info</button>
-      </div>
-
-      <div id="info-result" class="hidden"></div>
+      <div id="download-progress" class="hidden"></div>
+      <div id="download-result"></div>
     </section>
 
     <footer>
-      <p>
-        <a href="https://github.com/kesafatkari/tg-vault" target="_blank">tg-vault</a>
-        · <a href="https://github.com/kesafatkari/tg-vault/blob/main/README.md" target="_blank">Docs</a>
-        · <a href="https://github.com/kesafatkari/tg-vault/blob/main/LICENSE" target="_blank">MIT License</a>
-      </p>
-      <p style="margin-top: 4px;">All operations run in your browser. Your token never touches any server except Telegram.</p>
+      <p><a href="https://github.com/kesafatkari/tg-vault" target="_blank">tg-vault</a> · MIT License · All operations run in your browser</p>
     </footer>
   </div>
 
   <script>
-    // ════════════════════════════════════════════════════════
-    // tg-vault web app — pure client-side
-    // ════════════════════════════════════════════════════════
-
+    // ══════════════════════════════════════════════════════════════
+    // tg-vault web app v8 — fully client-side with IndexedDB
+    // ══════════════════════════════════════════════════════════════
     const STORAGE_KEY = 'tg-vault-settings';
+    const DB_NAME = 'tg-vault-db';
+    const DB_STORE = 'files';
     const MANIFEST_PREFIX = 'TG_VAULT_MANIFEST';
+    const CHUNK_HEADER_MAGIC = [0x54, 0x47, 0x56, 0x31]; // TGV1
+    const CHUNK_HEADER_SIZE = 40;
     let settings = loadSettings();
     let selectedFile = null;
+    let sortField = 'uploaded_at';
+    let sortDir = 'desc';
+    let currentFilter = {};
+
+    // ─────────────── IndexedDB ───────────────
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(DB_STORE)) {
+            const store = db.createObjectStore(DB_STORE, { keyPath: 'id', autoIncrement: true });
+            store.createIndex('sha256', 'sha256', { unique: true });
+            store.createIndex('name', 'name');
+            store.createIndex('uploaded_at', 'uploaded_at');
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbAdd(file) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readwrite');
+        const store = tx.objectStore(DB_STORE);
+        // Check if SHA256 exists
+        const idx = store.index('sha256');
+        const req = idx.get(file.sha256);
+        req.onsuccess = () => {
+          if (req.result) {
+            // Update existing
+            file.id = req.result.id;
+            store.put(file);
+          } else {
+            store.add(file);
+          }
+        };
+        tx.oncomplete = () => resolve(file);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function dbGetAll() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readonly');
+        const store = tx.objectStore(DB_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbGetById(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readonly');
+        const req = tx.objectStore(DB_STORE).get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbGetBySha(sha256) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readonly');
+        const req = tx.objectStore(DB_STORE).index('sha256').get(sha256);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
 
     // ─────────────── Settings ───────────────
-
     function loadSettings() {
       try {
         const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
@@ -445,9 +386,9 @@
           token: s.token || '',
           mainChannel: s.mainChannel || '',
           tempChannel: s.tempChannel || '',
-          chunkSize: s.chunkSize || 19,
+          corsProxy: s.corsProxy || 'https://proxy.cors.sh/',
         };
-      } catch { return { token: '', mainChannel: '', tempChannel: '', chunkSize: 19 }; }
+      } catch { return { token: '', mainChannel: '', tempChannel: '', corsProxy: 'https://proxy.cors.sh/' }; }
     }
 
     function saveSettings() {
@@ -455,7 +396,7 @@
         token: document.getElementById('token').value.trim(),
         mainChannel: document.getElementById('mainChannel').value.trim(),
         tempChannel: document.getElementById('tempChannel').value.trim() || document.getElementById('mainChannel').value.trim(),
-        chunkSize: parseInt(document.getElementById('chunkSize').value) || 19,
+        corsProxy: document.getElementById('corsProxy').value.trim(),
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
       showStatus('settings-status', 'success', '✅ Settings saved.');
@@ -464,11 +405,8 @@
     function clearSettings() {
       if (!confirm('Clear all settings?')) return;
       localStorage.removeItem(STORAGE_KEY);
-      settings = { token: '', mainChannel: '', tempChannel: '', chunkSize: 19 };
-      document.getElementById('token').value = '';
-      document.getElementById('mainChannel').value = '';
-      document.getElementById('tempChannel').value = '';
-      document.getElementById('chunkSize').value = '19';
+      settings = loadSettings();
+      fillSettingsForm();
       showStatus('settings-status', 'info', 'Settings cleared.');
     }
 
@@ -476,24 +414,18 @@
       document.getElementById('token').value = settings.token;
       document.getElementById('mainChannel').value = settings.mainChannel;
       document.getElementById('tempChannel').value = settings.tempChannel === settings.mainChannel ? '' : settings.tempChannel;
-      document.getElementById('chunkSize').value = settings.chunkSize;
+      document.getElementById('corsProxy').value = settings.corsProxy;
     }
 
     function requireSettings() {
-      // Reload from form fields in case user typed but didn't save
       settings = {
         token: document.getElementById('token').value.trim() || settings.token,
         mainChannel: document.getElementById('mainChannel').value.trim() || settings.mainChannel,
         tempChannel: document.getElementById('tempChannel').value.trim() || document.getElementById('mainChannel').value.trim() || settings.tempChannel,
-        chunkSize: parseInt(document.getElementById('chunkSize').value) || settings.chunkSize,
+        corsProxy: document.getElementById('corsProxy').value.trim() || settings.corsProxy,
       };
-      if (!settings.token) {
-        alert('Please enter your bot token in Settings first.');
-        switchTab('settings');
-        return false;
-      }
-      if (!settings.mainChannel) {
-        alert('Please enter your main channel ID in Settings first.');
+      if (!settings.token || !settings.mainChannel) {
+        alert('Please configure bot token and channels in Settings.');
         switchTab('settings');
         return false;
       }
@@ -502,108 +434,60 @@
 
     async function testConnection() {
       if (!requireSettings()) return;
-      const status = document.getElementById('settings-status');
-      status.innerHTML = '<div class="alert alert-info">🔌 Testing...</div>';
+      showStatus('settings-status', 'info', '🔌 Testing...');
       try {
-        // Test bot
         const me = await tgCall('getMe');
-        if (!me.ok) throw new Error(me.description || 'Invalid token');
-        const botId = me.result.id;
-        const botUsername = me.result.username;
-
-        // Test channel
+        if (!me.ok) throw new Error(me.description);
         const chat = await tgCall('getChat', { chat_id: settings.mainChannel });
-        if (!chat.ok) throw new Error('Cannot access channel: ' + chat.description);
-        const chatTitle = chat.result.title;
-
-        // Test admin rights
-        const member = await tgCall('getChatMember', { chat_id: settings.mainChannel, user_id: botId });
-        let rightsMsg = '';
+        if (!chat.ok) throw new Error('Cannot access main channel: ' + chat.description);
+        const member = await tgCall('getChatMember', { chat_id: settings.mainChannel, user_id: me.result.id });
+        let rights = '';
         if (member.ok) {
           const s = member.result.status;
           const canPost = member.result.can_post_messages || s === 'administrator';
           const canDelete = member.result.can_delete_messages || s === 'administrator';
-          if (s !== 'administrator' || !canPost || !canDelete) {
-            rightsMsg = ` ⚠️ Bot needs admin rights (post=${canPost}, delete=${canDelete})`;
-          } else {
-            rightsMsg = ` ✅ Admin rights OK (post=${canPost}, delete=${canDelete})`;
-          }
+          rights = ` Admin: post=${canPost}, delete=${canDelete}`;
         }
-
-        status.innerHTML = `<div class="alert alert-success">
-          ✅ Bot: <strong>@${botUsername}</strong> (id: ${botId})<br>
-          ✅ Channel: <strong>${chatTitle}</strong> (${settings.mainChannel})<br>
-          ${rightsMsg}
-        </div>`;
+        showStatus('settings-status', 'success', `✅ Bot: @${me.result.username} | Channel: ${chat.result.title}${rights}`);
       } catch (e) {
-        status.innerHTML = `<div class="alert alert-danger">❌ ${e.message}</div>`;
+        showStatus('settings-status', 'danger', `❌ ${e.message}`);
       }
     }
 
     // ─────────────── Telegram API ───────────────
-
     async function tgCall(method, params = {}, formData = null) {
       const url = `https://api.telegram.org/bot${settings.token}/${method}`;
       try {
         let res;
         if (formData) {
-          for (const [k, v] of Object.entries(params)) {
-            formData.append(k, v);
-          }
+          for (const [k, v] of Object.entries(params)) formData.append(k, v);
           res = await fetch(url, { method: 'POST', body: formData });
         } else {
-          const body = new URLSearchParams();
-          for (const [k, v] of Object.entries(params)) {
-            body.append(k, v);
-          }
-          res = await fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+          res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params) });
         }
         return await res.json();
-      } catch (e) {
-        return { ok: false, description: 'Network error: ' + e.message };
-      }
+      } catch (e) { return { ok: false, description: 'Network error: ' + e.message }; }
     }
 
     async function tgDownloadFile(fileId) {
       const info = await tgCall('getFile', { file_id: fileId });
       if (!info.ok) throw new Error('getFile failed: ' + info.description);
-      const url = `https://api.telegram.org/file/bot${settings.token}/${info.result.file_path}`;
-      const res = await fetch(url);
+      const filePath = info.result.file_path;
+      const directUrl = `https://api.telegram.org/file/bot${settings.token}/${filePath}`;
+      let fetchUrl = directUrl;
+      if (settings.corsProxy) {
+        fetchUrl = settings.corsProxy + directUrl;
+      }
+      const res = await fetch(fetchUrl);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return await res.arrayBuffer();
     }
 
     // ─────────────── Helpers ───────────────
-
-    function switchTab(name) {
-      document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-      document.querySelectorAll('.tab-content').forEach(s => s.classList.toggle('active', s.id === 'tab-' + name));
-    }
-
-    function showStatus(targetId, type, msg) {
-      document.getElementById(targetId).innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
-    }
-
-    function log(targetId, msg, cls = '') {
-      const el = document.getElementById(targetId);
-      const line = document.createElement('div');
-      line.className = 'log-line ' + cls;
-      line.textContent = msg;
-      el.appendChild(line);
-      el.scrollTop = el.scrollHeight;
-    }
-
-    function formatSize(bytes) {
-      if (bytes < 1024) return bytes + ' B';
-      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-    }
-
-    function formatSpeed(bytesPerSec) {
-      if (bytesPerSec <= 0) return '—';
-      return formatSize(bytesPerSec) + '/s';
-    }
+    function showStatus(id, type, msg) { document.getElementById(id).innerHTML = `<div class="alert alert-${type}">${msg}</div>`; }
+    function log(id, msg, cls = '') { const el = document.getElementById(id); if (!el) return; const l = document.createElement('div'); l.className = 'log-line ' + cls; l.textContent = msg; el.appendChild(l); el.scrollTop = el.scrollHeight; }
+    function formatSize(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'; if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MB'; return (b / 1073741824).toFixed(2) + ' GB'; }
+    function formatDate(ts) { return new Date(ts * 1000).toLocaleString(); }
 
     async function sha256(buffer) {
       const hash = await crypto.subtle.digest('SHA-256', buffer);
@@ -613,12 +497,7 @@
     function sanitizeFilename(name, maxLen = 60) {
       name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
       if (name.length <= maxLen) return name;
-      if (name.includes('.')) {
-        const idx = name.lastIndexOf('.');
-        const ext = name.slice(idx);
-        if (ext.length >= maxLen) return name.slice(0, maxLen);
-        return name.slice(0, maxLen - ext.length) + ext;
-      }
+      if (name.includes('.')) { const i = name.lastIndexOf('.'); const ext = name.slice(i); return ext.length >= maxLen ? name.slice(0, maxLen) : name.slice(0, maxLen - ext.length) + ext; }
       return name.slice(0, maxLen);
     }
 
@@ -631,96 +510,158 @@
       return tag || null;
     }
 
-    function sanitizeHashtags(tags) {
-      const seen = new Set();
-      const result = [];
-      for (const t of tags) {
-        const s = sanitizeHashtag(t);
-        if (s && !seen.has(s.toLowerCase())) {
-          seen.add(s.toLowerCase());
-          result.push(s);
-        }
-      }
-      return result;
-    }
-
     function parseTelegramLink(url) {
       url = url.trim();
       let m = url.match(/^(?:https?:\/\/)?t\.me\/c\/(\d+)\/(\d+)/);
       if (m) return { chat_id: parseInt('-100' + m[1]), message_id: parseInt(m[2]) };
       m = url.match(/^(?:https?:\/\/)?t\.me\/([a-zA-Z][a-zA-Z0-9_]{4,})\/(\d+)/);
       if (m) return { chat_id: '@' + m[1], message_id: parseInt(m[2]) };
-      throw new Error('Invalid Telegram link: ' + url);
+      throw new Error('Invalid link: ' + url);
     }
 
-    function buildShareLink(chatId, messageId) {
-      if (typeof chatId === 'string' && chatId.startsWith('@')) {
-        return `https://t.me/${chatId.slice(1)}/${messageId}`;
-      }
-      if (typeof chatId === 'number' && chatId < 0) {
-        const s = String(chatId);
-        if (s.startsWith('-100')) {
-          return `https://t.me/c/${s.slice(4)}/${messageId}`;
-        }
-      }
+    function buildShareLink(chatId, msgId) {
+      if (typeof chatId === 'string' && chatId.startsWith('@')) return `https://t.me/${chatId.slice(1)}/${msgId}`;
+      if (typeof chatId === 'number' && chatId < 0) { const s = String(chatId); if (s.startsWith('-100')) return `https://t.me/c/${s.slice(4)}/${msgId}`; }
       return null;
     }
 
-    function truncate(s, max) {
-      return s.length <= max ? s : s.slice(0, max - 3) + '...';
+    function truncate(s, max) { return s.length <= max ? s : s.slice(0, max - 3) + '...'; }
+
+    // ─────────────── Encryption (AES-256-GCM) ───────────────
+    async function deriveKey(password, salt) {
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 600000, hash: 'SHA-512' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    }
+
+    async function encryptChunk(data, key, chunkIndex) {
+      const iv = new Uint8Array(12);
+      new DataView(iv.buffer).setUint32(4, chunkIndex, false); // chunk index as IV (big-endian, last 4 bytes)
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+      return new Uint8Array(encrypted);
+    }
+
+    async function decryptChunk(data, key, chunkIndex) {
+      const iv = new Uint8Array(12);
+      new DataView(iv.buffer).setUint32(4, chunkIndex, false);
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+      return new Uint8Array(decrypted);
+    }
+
+    // ─────────────── Compression (gzip) ───────────────
+    const SKIP_COMPRESS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mkv', '.avi', '.mov', '.mp3', '.aac', '.m4a', '.ogg', '.flac', '.zip', '.rar', '.7z', '.gz', '.bz2', '.xz', '.pdf', '.docx', '.xlsx', '.pptx', '.epub', '.apk', '.iso', '.dmg']);
+
+    function shouldCompress(filename) {
+      const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+      return !SKIP_COMPRESS.has(ext);
+    }
+
+    async function compressData(data) {
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      writer.write(data);
+      writer.close();
+      const chunks = [];
+      const reader = cs.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const compressed = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
+      let offset = 0;
+      for (const c of chunks) { compressed.set(c, offset); offset += c.length; }
+      return compressed;
+    }
+
+    async function decompressData(data) {
+      const ds = new DecompressionStream('gzip');
+      const writer = ds.writable.getWriter();
+      writer.write(data);
+      writer.close();
+      const chunks = [];
+      const reader = ds.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const result = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
+      let offset = 0;
+      for (const c of chunks) { result.set(c, offset); offset += c.length; }
+      return result;
+    }
+
+    // ─────────────── Chunk Header (TGV1) ───────────────
+    function createChunkHeader(chunkIndex, totalChunks, originalSize, sha256Prefix, flags) {
+      const h = new ArrayBuffer(40);
+      const dv = new DataView(h);
+      new Uint8Array(h, 0, 4).set(CHUNK_HEADER_MAGIC);
+      dv.setUint16(4, 1, true);      // version
+      dv.setUint16(6, flags, true);   // flags
+      dv.setUint32(8, chunkIndex, true);
+      dv.setUint32(12, totalChunks, true);
+      dv.setUint32(16, originalSize, true); // low 32 bits (for files < 4GB)
+      dv.setUint32(20, 0, true);             // high 32 bits
+      new Uint8Array(h, 24, 16).set(sha256Prefix);
+      return new Uint8Array(h);
+    }
+
+    function isChunkWithHeader(data) {
+      return data.length >= 4 && data[0] === 0x54 && data[1] === 0x47 && data[2] === 0x56 && data[3] === 0x31;
     }
 
     // ─────────────── Upload ───────────────
-
-    function onFileSelected(event) {
-      const file = event.target.files[0];
-      if (file) setFile(file);
-    }
-
-    function setFile(file) {
-      selectedFile = file;
+    function onFileSelected(e) { const f = e.target.files[0]; if (f) setFile(f); }
+    function setFile(f) {
+      selectedFile = f;
       const el = document.getElementById('filename');
-      el.textContent = `📄 ${file.name} (${formatSize(file.size)})`;
+      el.textContent = `📄 ${f.name} (${formatSize(f.size)})`;
       el.classList.remove('hidden');
       document.getElementById('uploadBtn').disabled = false;
     }
 
-    // Drag & drop
     const dz = document.getElementById('dropzone');
-    ['dragenter', 'dragover'].forEach(e => dz.addEventListener(e, ev => {
-      ev.preventDefault(); dz.classList.add('dragover');
-    }));
-    ['dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => {
-      ev.preventDefault(); dz.classList.remove('dragover');
-    }));
-    dz.addEventListener('drop', ev => {
-      const file = ev.dataTransfer.files[0];
-      if (file) setFile(file);
+    ['dragenter', 'dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('dragover'); }));
+    ['dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('dragover'); }));
+    dz.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) setFile(f); });
+
+    document.getElementById('encrypt').addEventListener('change', e => {
+      document.getElementById('passwordGroup').classList.toggle('hidden', !e.target.checked);
     });
 
     async function startUpload() {
-      if (!selectedFile) { alert('Please select a file first.'); return; }
-      if (!requireSettings()) return;
-
-      const chunkSize = settings.chunkSize * 1024 * 1024;
+      if (!selectedFile || !requireSettings()) return;
+      const CHUNK_SIZE = 19 * 1024 * 1024;
       const file = selectedFile;
       const fileName = sanitizeFilename(file.name);
-      const totalParts = Math.max(1, Math.ceil(file.size / chunkSize));
-      const sessionId = Math.random().toString(36).slice(2, 10);
+      const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+      const doEncrypt = document.getElementById('encrypt').checked;
+      const doCompress = document.getElementById('compress').checked && shouldCompress(fileName);
+      const password = document.getElementById('encPassword').value;
       const desc = document.getElementById('desc').value.trim();
-      const tags = sanitizeHashtags(document.getElementById('tags').value.split(',').map(t => t.trim()).filter(Boolean));
+      const rawTags = document.getElementById('tags').value.split(',').map(t => t.trim()).filter(Boolean);
+      const hashtags = rawTags.map(sanitizeHashtag).filter(Boolean);
+
+      if (doEncrypt && !password) { alert('Enter encryption password.'); return; }
 
       // Show progress
-      document.getElementById('upload-progress').classList.remove('hidden');
-      document.getElementById('uploadLog').innerHTML = '';
-      document.getElementById('uploadBar').style.width = '0%';
-      document.getElementById('uploadPercent').textContent = '0%';
+      const progDiv = document.getElementById('upload-progress');
+      progDiv.classList.remove('hidden');
+      progDiv.innerHTML = `<div class="card"><h2>📊 Progress</h2><div class="progress"><div class="progress-bar" id="uploadBar" style="width:0%"></div></div><div class="progress-text"><span id="uploadStatus">Starting...</span><span id="uploadPct">0%</span></div><div class="log" id="uploadLog"></div></div>`;
       document.getElementById('uploadBtn').disabled = true;
+      document.getElementById('upload-result').innerHTML = '';
 
-      log('uploadLog', `📦 File: ${fileName}`);
-      log('uploadLog', `💾 Size: ${formatSize(file.size)}`);
+      log('uploadLog', `📦 File: ${fileName} (${formatSize(file.size)})`);
       log('uploadLog', `🔢 Parts: ${totalParts}`);
-      log('uploadLog', `🆔 Session: ${sessionId}`);
+      if (doEncrypt) log('uploadLog', `🔐 Encryption: AES-256-GCM`);
+      if (doCompress) log('uploadLog', `📦 Compression: gzip`);
 
       try {
         // SHA256
@@ -728,44 +669,54 @@
         const arrayBuffer = await file.arrayBuffer();
         const fileHash = await sha256(arrayBuffer);
         log('uploadLog', `✅ SHA256: ${fileHash}`, 'success');
+        const sha256Prefix = new Uint8Array(arrayBuffer.slice(0)).slice(0, 16); // first 16 bytes of hash
+        // Actually we need first 16 bytes of the hash hex decoded
+        const hashBytes = new Uint8Array(fileHash.match(/.{2}/g).map(b => parseInt(b, 16)));
+        const prefix16 = hashBytes.slice(0, 16);
+
+        // Encryption setup
+        let encKey = null, encSalt = null, passwordHash = null;
+        if (doEncrypt) {
+          encSalt = crypto.getRandomValues(new Uint8Array(32));
+          encKey = await deriveKey(password, encSalt);
+          // Password verification hash
+          const verifySalt = new TextEncoder().encode('tg-vault-password-verify-v1');
+          const verifyKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+          const verifyHash = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: verifySalt, iterations: 600000, hash: 'SHA-512' }, verifyKey, 256);
+          passwordHash = Array.from(new Uint8Array(verifyHash)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
 
         // Description message
-        log('uploadLog', '📝 Sending description message...');
-        let descLines = [
-          `📦 File: ${fileName}`,
-          `💾 Size: ${formatSize(file.size)}`,
-          `🔢 Parts: ${totalParts}`,
-          `🔐 SHA256: ${fileHash}`,
-          `🆔 Session: ${sessionId}`,
-        ];
-        if (desc) { descLines.push('', '📝 Description:', desc); }
-        if (tags.length) { descLines.push('', tags.map(t => '#' + t).join(' ')); }
-        const descRes = await tgCall('sendMessage', {
-          chat_id: settings.mainChannel,
-          text: truncate(descLines.join('\n'), 4096),
-          disable_web_page_preview: true,
-        });
-        if (!descRes.ok) throw new Error('Failed to send description: ' + descRes.description);
+        log('uploadLog', '📝 Sending description...');
+        let descLines = [`📦 File: ${fileName}`, `💾 Size: ${formatSize(file.size)}`, `🔢 Parts: ${totalParts}`, `🔐 SHA256: ${fileHash}`];
+        if (desc) descLines.push('', '📝 ' + desc);
+        if (hashtags.length) descLines.push('', hashtags.map(t => '#' + t).join(' '));
+        const descRes = await tgCall('sendMessage', { chat_id: settings.mainChannel, text: truncate(descLines.join('\n'), 4096), disable_web_page_preview: true });
+        if (!descRes.ok) throw new Error('Description failed: ' + descRes.description);
         let prevMsgId = descRes.result.message_id;
-        log('uploadLog', `  ✅ Description sent (msg ${prevMsgId})`, 'success');
 
-        // Upload parts
+        // Upload chunks
         const messageIds = [];
         const startTime = Date.now();
         for (let i = 0; i < totalParts; i++) {
           const partNum = i + 1;
-          const start = i * chunkSize;
-          const end = Math.min(start + chunkSize, file.size);
-          const chunk = file.slice(start, end);
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          let chunk = new Uint8Array(arrayBuffer.slice(start, end));
+
+          // Pipeline: compress → encrypt → header
+          let flags = 0;
+          if (doCompress) { chunk = await compressData(chunk); flags |= 1; }
+          if (doEncrypt) { chunk = await encryptChunk(chunk, encKey, i); flags |= 2; }
+          const header = createChunkHeader(i, totalParts, file.size, prefix16, flags);
+          const payload = new Uint8Array(header.length + chunk.length);
+          payload.set(header, 0);
+          payload.set(chunk, header.length);
+
           const partName = `${fileName}.part${String(partNum).padStart(4, '0')}of${String(totalParts).padStart(4, '0')}`;
-
           const formData = new FormData();
-          formData.append('document', chunk, partName);
-
-          const params = {
-            chat_id: settings.mainChannel,
-            caption: truncate(`📦 part ${partNum}/${totalParts} | ${fileName} | #${sessionId}`, 1024),
-          };
+          formData.append('document', new Blob([payload]), partName);
+          const params = { chat_id: settings.mainChannel, caption: truncate(`📦 part ${partNum}/${totalParts} | ${fileName}`) };
           if (prevMsgId) params.reply_to_message_id = prevMsgId;
 
           const res = await tgCall('sendDocument', params, formData);
@@ -774,266 +725,351 @@
           messageIds.push(res.result.message_id);
           prevMsgId = res.result.message_id;
 
-          // Update progress
-          const pct = (partNum / totalParts) * 100;
+          const pct = ((partNum / totalParts) * 100).toFixed(1);
           document.getElementById('uploadBar').style.width = pct + '%';
-          document.getElementById('uploadPercent').textContent = pct.toFixed(1) + '%';
+          document.getElementById('uploadPct').textContent = pct + '%';
           const elapsed = (Date.now() - startTime) / 1000;
-          const speed = (partNum * chunkSize) / elapsed;
-          const eta = (totalParts - partNum) * (elapsed / partNum);
-          document.getElementById('uploadStatus').textContent =
-            `Uploaded part ${partNum}/${totalParts} · ${formatSpeed(speed)} · ETA ${Math.round(eta)}s`;
-          log('uploadLog', `  ✅ Part ${partNum}/${totalParts} uploaded (msg ${prevMsgId})`);
+          const speed = formatSpeed((partNum * CHUNK_SIZE) / elapsed);
+          document.getElementById('uploadStatus').textContent = `Part ${partNum}/${totalParts} · ${speed}`;
+          log('uploadLog', `  ✅ Part ${partNum}/${totalParts} uploaded`);
         }
 
         // Manifest
         log('uploadLog', '📋 Sending manifest...');
         const manifest = {
-          name: fileName,
-          size: file.size,
-          total_parts: totalParts,
-          chunk_size: chunkSize,
-          message_ids: messageIds,
-          sha256: fileHash,
-          channel_id: settings.mainChannel,
-          description_msg_id: descRes.result.message_id,
-          description: desc,
-          hashtags: tags,
-          session_id: sessionId,
-          version: 6,
-          created_at: Date.now() / 1000,
+          name: fileName, size: file.size, total_parts: totalParts, chunk_size: CHUNK_SIZE,
+          message_ids: messageIds, sha256: fileHash, channel_id: settings.mainChannel,
+          description_msg_id: descRes.result.message_id, description: desc, hashtags,
+          session_id: Math.random().toString(36).slice(2, 10), version: 8, created_at: Date.now() / 1000,
+          encrypted: doEncrypt, compressed: doCompress, has_chunk_header: true,
         };
+        if (doEncrypt) {
+          manifest.encryption_salt = btoa(String.fromCharCode(...encSalt));
+          manifest.encryption_algorithm = 'aes-256-gcm';
+          manifest.encryption_kdf = 'pbkdf2-sha512-600k';
+          manifest.password_hash = passwordHash;
+        }
         const manifestBlob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
-        const manifestFormData = new FormData();
-        manifestFormData.append('document', manifestBlob, `${fileName}.manifest.json`);
-        const manifestRes = await tgCall('sendDocument', {
-          chat_id: settings.mainChannel,
-          caption: truncate(`${MANIFEST_PREFIX}|${fileName}|${totalParts}|${fileHash.slice(0, 16)}`, 1024),
+        const mfFormData = new FormData();
+        mfFormData.append('document', manifestBlob, `${fileName}.manifest.json`);
+        const mfRes = await tgCall('sendDocument', {
+          chat_id: settings.mainChannel, caption: truncate(`${MANIFEST_PREFIX}|${fileName}|${totalParts}|${fileHash.slice(0, 16)}`),
           reply_to_message_id: prevMsgId,
-        }, manifestFormData);
-        if (!manifestRes.ok) throw new Error('Manifest failed: ' + manifestRes.description);
+        }, mfFormData);
+        if (!mfRes.ok) throw new Error('Manifest failed: ' + mfRes.description);
 
-        const shareLink = buildShareLink(settings.mainChannel, manifestRes.result.message_id);
-        log('uploadLog', `✅ Manifest sent (msg ${manifestRes.result.message_id})`, 'success');
+        const shareLink = buildShareLink(settings.mainChannel, mfRes.result.message_id);
+        manifest.manifest_message_id = mfRes.result.message_id;
+
+        // Save to IndexedDB
+        await dbAdd({ ...manifest, share_link: shareLink, uploaded_at: Date.now() / 1000, status: 'uploaded' });
+        log('uploadLog', `💾 Saved to local database`, 'success');
         log('uploadLog', `🎉 Upload complete!`, 'success');
         log('uploadLog', `🔗 ${shareLink}`, 'success');
 
         document.getElementById('uploadStatus').textContent = 'Complete!';
-        document.getElementById('upload-result').innerHTML = `
-          <div class="card">
-            <h2>🎉 Upload Complete!</h2>
-            <table class="info-table">
-              <tr><td>File</td><td>${fileName}</td></tr>
-              <tr><td>Size</td><td>${formatSize(file.size)}</td></tr>
-              <tr><td>Parts</td><td>${totalParts}</td></tr>
-              <tr><td>SHA256</td><td>${fileHash}</td></tr>
-            </table>
-            <div class="alert alert-success" style="margin-top: 12px;">
-              <strong>🔗 Download link:</strong><br>
-              <a href="${shareLink}" target="_blank" style="color: white;">${shareLink}</a>
-            </div>
-            <button class="btn btn-secondary" onclick="copyToClipboard('${shareLink}')">📋 Copy link</button>
-          </div>
-        `;
+        document.getElementById('upload-result').innerHTML = `<div class="card"><h2>🎉 Upload Complete!</h2><table><tr><td>File</td><td>${fileName}</td></tr><tr><td>Size</td><td>${formatSize(file.size)}</td></tr><tr><td>SHA256</td><td style="word-break:break-all">${fileHash}</td></tr><tr><td>Encrypted</td><td>${doEncrypt ? '🔐 Yes' : 'No'}</td></tr><tr><td>Compressed</td><td>${doCompress ? '📦 Yes' : 'No'}</td></tr></table><div class="alert alert-success" style="margin-top:12px"><strong>🔗 Download link:</strong><br><a href="${shareLink}" target="_blank" style="color:white">${shareLink}</a></div></div>`;
       } catch (e) {
         log('uploadLog', `❌ Error: ${e.message}`, 'error');
         document.getElementById('uploadStatus').textContent = 'Failed';
-        showStatus('upload-result', 'danger', `❌ ${e.message}`);
       } finally {
         document.getElementById('uploadBtn').disabled = false;
       }
     }
 
     // ─────────────── Download ───────────────
-
-    async function startDownload() {
-      if (!requireSettings()) return;
-      const link = document.getElementById('dlLink').value.trim();
-      if (!link) { alert('Please enter a manifest link.'); return; }
-
-      document.getElementById('download-progress').classList.remove('hidden');
-      document.getElementById('downloadLog').innerHTML = '';
-      document.getElementById('downloadBar').style.width = '0%';
-      document.getElementById('downloadPercent').textContent = '0%';
-      document.getElementById('downloadBtn').disabled = true;
-
-      log('downloadLog', `🌐 Link: ${link}`);
+    async function downloadByLink(link, password) {
+      const progDiv = document.getElementById('download-progress');
+      progDiv.classList.remove('hidden');
+      progDiv.innerHTML = `<div class="card"><h2>📊 Download Progress</h2><div class="progress"><div class="progress-bar" id="dlBar" style="width:0%"></div></div><div class="progress-text"><span id="dlStatus">Starting...</span><span id="dlPct">0%</span></div><div class="log" id="dlLog"></div></div>`;
 
       try {
         const { chat_id, message_id } = parseTelegramLink(link);
-        log('downloadLog', `🔗 Parsed: chat_id=${chat_id}, message_id=${message_id}`);
+        log('dlLog', `🔗 Parsed: chat_id=${chat_id}, msg=${message_id}`);
 
-        // Fetch manifest via temp channel forward
-        log('downloadLog', '📡 Fetching manifest...');
-        const fwdRes = await tgCall('forwardMessage', {
-          chat_id: settings.tempChannel,
-          from_chat_id: chat_id,
-          message_id: message_id,
-          disable_notification: true,
-        });
-        if (!fwdRes.ok) throw new Error('Cannot fetch manifest: ' + fwdRes.description);
-        const tempMsgId = fwdRes.result.message_id;
-        const caption = fwdRes.result.caption || '';
+        // Fetch manifest
+        log('dlLog', '📡 Fetching manifest...');
+        const fwd = await tgCall('forwardMessage', { chat_id: settings.tempChannel, from_chat_id: chat_id, message_id, disable_notification: true });
+        if (!fwd.ok) throw new Error('Cannot fetch manifest: ' + fwd.description);
+        const tempId = fwd.result.message_id;
+        const caption = fwd.result.caption || '';
         if (!caption.startsWith(MANIFEST_PREFIX)) {
-          await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempMsgId });
-          throw new Error('This message is not a manifest.');
+          await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempId });
+          throw new Error('Not a manifest message.');
+        }
+        const manifestBuf = await tgDownloadFile(fwd.result.document.file_id);
+        await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempId });
+        const manifest = JSON.parse(new TextDecoder().decode(manifestBuf));
+        log('dlLog', `✅ Manifest: ${manifest.name} (${manifest.total_parts} parts)`, 'success');
+
+        // Encryption setup
+        let encKey = null;
+        if (manifest.encrypted) {
+          if (!password) password = prompt('🔐 Enter password for encrypted file:');
+          if (!password) throw new Error('Password required');
+          // Verify password
+          if (manifest.password_hash) {
+            const verifySalt = new TextEncoder().encode('tg-vault-password-verify-v1');
+            const verifyKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+            const verifyHash = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: verifySalt, iterations: 600000, hash: 'SHA-512' }, verifyKey, 256);
+            const verifyHex = Array.from(new Uint8Array(verifyHash)).map(b => b.toString(16).padStart(2, '0')).join('');
+            if (verifyHex !== manifest.password_hash) throw new Error('Wrong password');
+          }
+          const salt = Uint8Array.from(atob(manifest.encryption_salt), c => c.charCodeAt(0));
+          encKey = await deriveKey(password, salt);
+          log('dlLog', '🔐 Decryption enabled');
         }
 
-        // Download manifest JSON
-        const manifestBuf = await tgDownloadFile(fwdRes.result.document.file_id);
-        await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempMsgId });
-        const manifest = JSON.parse(new TextDecoder().decode(manifestBuf));
-        log('downloadLog', `✅ Manifest: ${manifest.name} (${manifest.total_parts} parts)`, 'success');
-
-        // Download parts
+        // Download chunks
         const totalParts = manifest.total_parts;
+        const chunks = [];
         const startTime = Date.now();
-        const chunks = new Array(totalParts);
-
         for (let i = 0; i < totalParts; i++) {
           const partNum = i + 1;
           const msgId = manifest.message_ids[i];
-
-          // Forward to temp
-          const pfwd = await tgCall('forwardMessage', {
-            chat_id: settings.tempChannel,
-            from_chat_id: manifest.channel_id,
-            message_id: msgId,
-            disable_notification: true,
-          });
+          const pfwd = await tgCall('forwardMessage', { chat_id: settings.tempChannel, from_chat_id: manifest.channel_id, message_id: msgId, disable_notification: true });
           if (!pfwd.ok) throw new Error(`Cannot fetch part ${partNum}: ` + pfwd.description);
           const ptempId = pfwd.result.message_id;
-
-          // Download
-          const buf = await tgDownloadFile(pfwd.result.document.file_id);
+          let data = new Uint8Array(await tgDownloadFile(pfwd.result.document.file_id));
           await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: ptempId });
-          chunks[i] = buf;
 
-          const pct = (partNum / totalParts) * 100;
-          document.getElementById('downloadBar').style.width = pct + '%';
-          document.getElementById('downloadPercent').textContent = pct.toFixed(1) + '%';
-          const elapsed = (Date.now() - startTime) / 1000;
-          const speed = (partNum * manifest.chunk_size) / elapsed;
-          const eta = (totalParts - partNum) * (elapsed / partNum);
-          document.getElementById('downloadStatus').textContent =
-            `Downloaded part ${partNum}/${totalParts} · ${formatSpeed(speed)} · ETA ${Math.round(eta)}s`;
-          log('downloadLog', `  ✅ Part ${partNum}/${totalParts} downloaded`);
+          // Strip header
+          if (isChunkWithHeader(data)) data = data.slice(CHUNK_HEADER_SIZE);
+          // Decrypt
+          if (encKey) data = await decryptChunk(data, encKey, i);
+          // Decompress
+          if (manifest.compressed) data = await decompressData(data);
+          chunks.push(data);
+
+          const pct = ((partNum / totalParts) * 100).toFixed(1);
+          document.getElementById('dlBar').style.width = pct + '%';
+          document.getElementById('dlPct').textContent = pct + '%';
+          document.getElementById('dlStatus').textContent = `Part ${partNum}/${totalParts}`;
+          log('dlLog', `  ✅ Part ${partNum}/${totalParts}`);
         }
 
-        // Assemble
-        log('downloadLog', '🧩 Assembling file...');
+        // Assemble + verify
+        log('dlLog', '🧩 Assembling...');
         const blob = new Blob(chunks, { type: 'application/octet-stream' });
-
-        // Verify SHA256
-        log('downloadLog', '🔍 Verifying SHA256...');
+        log('dlLog', '🔍 Verifying SHA256...');
         const arrayBuf = await blob.arrayBuffer();
         const actualHash = await sha256(arrayBuf);
-        if (actualHash !== manifest.sha256) {
-          throw new Error(`SHA256 mismatch!\n  Expected: ${manifest.sha256}\n  Got: ${actualHash}`);
-        }
-        log('downloadLog', `✅ SHA256 verified!`, 'success');
+        if (actualHash !== manifest.sha256) throw new Error(`SHA256 mismatch!\n  Expected: ${manifest.sha256}\n  Got: ${actualHash}`);
+        log('dlLog', `✅ SHA256 verified!`, 'success');
 
-        // Save
+        // Save to IndexedDB
+        let dbFile = await dbGetBySha(manifest.sha256);
+        if (!dbFile) {
+          dbFile = { ...manifest, share_link: link, uploaded_at: manifest.created_at, status: 'uploaded' };
+          await dbAdd(dbFile);
+          log('dlLog', '💾 Saved to local database', 'success');
+        }
+
+        // Download to user
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = manifest.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        a.href = url; a.download = manifest.name;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
-
-        log('downloadLog', `🎉 Saved as: ${manifest.name}`, 'success');
-        document.getElementById('downloadStatus').textContent = 'Complete!';
-        document.getElementById('download-result').innerHTML = `
-          <div class="card">
-            <h2>🎉 Download Complete!</h2>
-            <table class="info-table">
-              <tr><td>File</td><td>${manifest.name}</td></tr>
-              <tr><td>Size</td><td>${formatSize(manifest.size)}</td></tr>
-              <tr><td>Parts</td><td>${totalParts}</td></tr>
-              <tr><td>SHA256</td><td>${manifest.sha256}</td></tr>
-              <tr><td>Verified</td><td style="color: var(--success);">✅ Yes</td></tr>
-            </table>
-          </div>
-        `;
+        log('dlLog', `🎉 Saved as: ${manifest.name}`, 'success');
+        document.getElementById('dlStatus').textContent = 'Complete!';
+        document.getElementById('download-result').innerHTML = `<div class="alert alert-success">✅ ${manifest.name} downloaded and verified!</div>`;
+        applyFilters(); // Refresh table
+        return true;
       } catch (e) {
-        log('downloadLog', `❌ Error: ${e.message}`, 'error');
-        document.getElementById('downloadStatus').textContent = 'Failed';
-        showStatus('download-result', 'danger', `❌ ${e.message}`);
-      } finally {
-        document.getElementById('downloadBtn').disabled = false;
+        log('dlLog', `❌ ${e.message}`, 'error');
+        document.getElementById('dlStatus').textContent = 'Failed';
+        return false;
       }
     }
 
-    // ─────────────── Info ───────────────
+    // ─────────────── Browse / Filter / Sort ───────────────
+    function getFilters() {
+      const f = {
+        name: document.getElementById('fName').value.trim(),
+        tag: document.getElementById('fTag').value.trim(),
+        minSize: document.getElementById('fMinSize').value ? parseFloat(document.getElementById('fMinSize').value) * 1048576 : null,
+        maxSize: document.getElementById('fMaxSize').value ? parseFloat(document.getElementById('fMaxSize').value) * 1048576 : null,
+        minParts: document.getElementById('fMinParts').value ? parseInt(document.getElementById('fMinParts').value) : null,
+        maxParts: document.getElementById('fMaxParts').value ? parseInt(document.getElementById('fMaxParts').value) : null,
+        encrypted: document.getElementById('fEnc').checked,
+        compressed: document.getElementById('fComp').checked,
+        status: document.getElementById('fStatus').value,
+      };
+      return f;
+    }
 
-    async function showInfo() {
-      if (!requireSettings()) return;
-      const link = document.getElementById('infoLink').value.trim();
-      if (!link) { alert('Please enter a manifest link.'); return; }
-      const result = document.getElementById('info-result');
-      result.innerHTML = '<div class="alert alert-info">Loading...</div>';
-      result.classList.remove('hidden');
+    function filterFiles(files, f) {
+      let result = files.filter(file => {
+        if (f.name && !file.name.toLowerCase().includes(f.name.toLowerCase())) return false;
+        if (f.tag && (!file.hashtags || !file.hashtags.includes(f.tag))) return false;
+        if (f.minSize !== null && file.size < f.minSize) return false;
+        if (f.maxSize !== null && file.size > f.maxSize) return false;
+        if (f.minParts !== null && file.total_parts < f.minParts) return false;
+        if (f.maxParts !== null && file.total_parts > f.maxParts) return false;
+        if (f.encrypted && !file.encrypted) return false;
+        if (f.compressed && !file.compressed) return false;
+        if (f.status && file.status !== f.status) return false;
+        return true;
+      });
+      // Sort
+      result.sort((a, b) => {
+        let av = a[sortField], bv = b[sortField];
+        if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+        if (av < bv) return sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+      return result;
+    }
 
-      try {
-        const { chat_id, message_id } = parseTelegramLink(link);
-        const fwdRes = await tgCall('forwardMessage', {
-          chat_id: settings.tempChannel,
-          from_chat_id: chat_id,
-          message_id: message_id,
-          disable_notification: true,
-        });
-        if (!fwdRes.ok) throw new Error('Cannot fetch: ' + fwdRes.description);
-        const tempMsgId = fwdRes.result.message_id;
-        const caption = fwdRes.result.caption || '';
-        if (!caption.startsWith(MANIFEST_PREFIX)) {
-          await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempMsgId });
-          throw new Error('This message is not a manifest.');
+    async function applyFilters() {
+      const f = getFilters();
+      currentFilter = f;
+      const all = await dbGetAll();
+      const filtered = filterFiles(all, f);
+      document.getElementById('resultCount').textContent = `${filtered.length} of ${all.length} files`;
+      const tbody = document.getElementById('filesBody');
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px;">No files match the filter</td></tr>';
+        return;
+      }
+      tbody.innerHTML = filtered.map(f => {
+        const date = new Date(f.uploaded_at * 1000).toLocaleString();
+        const enc = f.encrypted ? '🔐' : '';
+        const comp = f.compressed ? '📦' : '';
+        const link = f.share_link || '';
+        return `<tr>
+          <td class="id">${f.id}</td>
+          <td class="name">${f.name}</td>
+          <td class="size">${formatSize(f.size)}</td>
+          <td class="parts">${f.total_parts}</td>
+          <td>${enc} ${comp}</td>
+          <td>${date}</td>
+          <td class="link"><a href="${link}" target="_blank">${link}</a></td>
+          <td class="actions">
+            <button class="btn btn-sm" onclick="downloadById(${f.id})">📥</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteById(${f.id})">🗑️</button>
+          </td>
+        </tr>`;
+      }).join('');
+      // Update sort indicators
+      document.querySelectorAll('th[data-sort]').forEach(th => {
+        th.classList.remove('sorted', 'asc');
+        if (th.dataset.sort === sortField) {
+          th.classList.add('sorted');
+          if (sortDir === 'asc') th.classList.add('asc');
         }
-        const buf = await tgDownloadFile(fwdRes.result.document.file_id);
-        await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempMsgId });
-        const m = JSON.parse(new TextDecoder().decode(buf));
-
-        const date = new Date((m.created_at || 0) * 1000).toLocaleString();
-        result.innerHTML = `
-          <div class="card">
-            <h2>📋 File Info</h2>
-            <table class="info-table">
-              <tr><td>Name</td><td>${m.name}</td></tr>
-              <tr><td>Size</td><td>${formatSize(m.size)}</td></tr>
-              <tr><td>Parts</td><td>${m.total_parts}</td></tr>
-              <tr><td>SHA256</td><td>${m.sha256}</td></tr>
-              <tr><td>Channel</td><td>${m.channel_id}</td></tr>
-              ${m.description ? `<tr><td>Description</td><td>${escapeHtml(m.description)}</td></tr>` : ''}
-              ${m.hashtags && m.hashtags.length ? `<tr><td>Hashtags</td><td>${m.hashtags.map(t => '#' + t).join(', ')}</td></tr>` : ''}
-              <tr><td>Created</td><td>${date}</td></tr>
-              <tr><td>Version</td><td>v${m.version || '?'}</td></tr>
-            </table>
-          </div>
-        `;
-      } catch (e) {
-        result.innerHTML = `<div class="alert alert-danger">❌ ${e.message}</div>`;
-      }
-    }
-
-    function escapeHtml(s) {
-      const div = document.createElement('div');
-      div.textContent = s;
-      return div.innerHTML;
-    }
-
-    function copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => {
-        alert('Copied: ' + text);
       });
     }
 
-    // ─────────────── Init ───────────────
+    function setSort(field) {
+      if (sortField === field) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortField = field;
+        sortDir = 'desc';
+      }
+      applyFilters();
+    }
 
-    document.querySelectorAll('nav.tabs button').forEach(b => {
-      b.addEventListener('click', () => switchTab(b.dataset.tab));
-    });
+    function resetFilters() {
+      ['fName', 'fTag', 'fMinSize', 'fMaxSize', 'fMinParts', 'fMaxParts'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('fEnc').checked = false;
+      document.getElementById('fComp').checked = false;
+      document.getElementById('fStatus').value = 'uploaded';
+      applyFilters();
+    }
+
+    async function downloadById(id) {
+      const file = await dbGetById(id);
+      if (!file) { alert('File not found'); return; }
+      const password = file.encrypted ? prompt('🔐 Enter password:') : null;
+      await downloadByLink(file.share_link, password);
+    }
+
+    async function deleteById(id) {
+      if (!confirm('Delete this record from local database? (File stays in Telegram)')) return;
+      const db = await openDB();
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).delete(id);
+      tx.oncomplete = () => { applyFilters(); };
+    }
+
+    async function downloadAllMatching() {
+      const all = await dbGetAll();
+      const filtered = filterFiles(all, currentFilter);
+      if (filtered.length === 0) { alert('No files match the filter.'); return; }
+      if (!confirm(`Download ${filtered.length} files?`)) return;
+      let success = 0;
+      for (let i = 0; i < filtered.length; i++) {
+        const f = filtered[i];
+        console.log(`Downloading ${i + 1}/${filtered.length}: ${f.name}`);
+        const password = f.encrypted ? prompt(`🔐 Password for ${f.name}:`) : null;
+        const ok = await downloadByLink(f.share_link, password);
+        if (ok) success++;
+      }
+      alert(`Downloaded ${success}/${filtered.length} files successfully.`);
+    }
+
+    // ─────────────── DB Sync to Telegram ───────────────
+    async function syncDBToTelegram() {
+      if (!requireSettings()) return;
+      const all = await dbGetAll();
+      if (all.length === 0) { alert('Database is empty.'); return; }
+      const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `tg-vault-db-${ts}.json`;
+      const formData = new FormData();
+      formData.append('document', blob, filename);
+      const res = await tgCall('sendDocument', {
+        chat_id: settings.tempChannel,
+        caption: `TG_VAULT_DB_BACKUP|files:${all.length}|synced:${Math.floor(Date.now() / 1000)}`,
+      }, formData);
+      if (res.ok) {
+        const link = buildShareLink(settings.tempChannel, res.result.message_id);
+        alert(`✅ DB synced to Telegram!\n${all.length} files\nMessage: ${link}`);
+      } else {
+        alert('❌ Sync failed: ' + res.description);
+      }
+    }
+
+    async function restoreDBFromTelegram() {
+      if (!requireSettings()) return;
+      const link = prompt('Enter the DB backup message link:');
+      if (!link) return;
+      try {
+        const { chat_id, message_id } = parseTelegramLink(link);
+        const fwd = await tgCall('forwardMessage', { chat_id: settings.tempChannel, from_chat_id: chat_id, message_id, disable_notification: true });
+        if (!fwd.ok) throw new Error('Cannot fetch: ' + fwd.description);
+        const tempId = fwd.result.message_id;
+        const buf = await tgDownloadFile(fwd.result.document.file_id);
+        await tgCall('deleteMessage', { chat_id: settings.tempChannel, message_id: tempId });
+        const data = JSON.parse(new TextDecoder().decode(buf));
+        if (!Array.isArray(data)) throw new Error('Invalid DB backup format');
+        // Merge into IndexedDB
+        for (const f of data) {
+          f.id = undefined; // Let IndexedDB auto-assign
+          await dbAdd(f);
+        }
+        alert(`✅ Restored ${data.length} records!`);
+        applyFilters();
+      } catch (e) {
+        alert('❌ Restore failed: ' + e.message);
+      }
+    }
+
+    function formatSpeed(bps) {
+      if (bps <= 0) return '—';
+      return formatSize(bps) + '/s';
+    }
+
+    // ─────────────── Init ───────────────
+    document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('nav.tabs button').forEach(x => x.classList.toggle('active', x === b));
+      document.querySelectorAll('.tab-content').forEach(s => s.classList.toggle('active', s.id === 'tab-' + b.dataset.tab));
+      if (b.dataset.tab === 'browse') applyFilters();
+    }));
     fillSettingsForm();
   </script>
 </body>

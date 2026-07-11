@@ -251,6 +251,181 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def query_files(self, filters=None):
+        """Query files with flexible filters.
+
+        filters dict (all optional):
+            name:         str  — LIKE pattern for filename
+            description:  str  — LIKE pattern for description
+            tag:          str  — exact tag match (via tags table)
+            min_size:     int  — minimum file size in bytes
+            max_size:     int  — maximum file size in bytes
+            min_parts:    int  — minimum number of parts
+            max_parts:    int  — maximum number of parts
+            encrypted:    bool — filter by encryption status (None = any)
+            compressed:   bool — filter by compression status (None = any)
+            since:        int  — uploaded_at >= this unix timestamp
+            until:        int  — uploaded_at <= this unix timestamp
+            status:       str  — file status (default 'uploaded')
+            sort:         str  — sort field: name, size, parts, date, downloads
+            sort_dir:     str  — 'asc' or 'desc' (default 'desc')
+            limit:        int  — max results (default 50)
+            offset:       int  — pagination offset (default 0)
+        """
+        filters = filters or {}
+        where_clauses = []
+        params = []
+        join_tags = False
+
+        status = filters.get("status", "uploaded")
+        if status:
+            where_clauses.append("f.status = ?")
+            params.append(status)
+
+        if filters.get("name"):
+            where_clauses.append("f.name LIKE ?")
+            params.append(f"%{filters['name']}%")
+
+        if filters.get("description"):
+            where_clauses.append("f.description LIKE ?")
+            params.append(f"%{filters['description']}%")
+
+        if filters.get("tag"):
+            where_clauses.append("t.tag = ?")
+            params.append(filters["tag"])
+            join_tags = True
+
+        if filters.get("min_size") is not None:
+            where_clauses.append("f.size >= ?")
+            params.append(int(filters["min_size"]))
+
+        if filters.get("max_size") is not None:
+            where_clauses.append("f.size <= ?")
+            params.append(int(filters["max_size"]))
+
+        if filters.get("min_parts") is not None:
+            where_clauses.append("f.total_parts >= ?")
+            params.append(int(filters["min_parts"]))
+
+        if filters.get("max_parts") is not None:
+            where_clauses.append("f.total_parts <= ?")
+            params.append(int(filters["max_parts"]))
+
+        if filters.get("encrypted") is not None:
+            where_clauses.append("f.encrypted = ?")
+            params.append(1 if filters["encrypted"] else 0)
+
+        if filters.get("compressed") is not None:
+            where_clauses.append("f.compressed = ?")
+            params.append(1 if filters["compressed"] else 0)
+
+        if filters.get("since") is not None:
+            where_clauses.append("f.uploaded_at >= ?")
+            params.append(int(filters["since"]))
+
+        if filters.get("until") is not None:
+            where_clauses.append("f.uploaded_at <= ?")
+            params.append(int(filters["until"]))
+
+        # Sort
+        sort_field = filters.get("sort", "date")
+        sort_map = {
+            "name": "f.name",
+            "size": "f.size",
+            "parts": "f.total_parts",
+            "date": "f.uploaded_at",
+            "downloads": "dl_count",
+        }
+        sort_col = sort_map.get(sort_field, "f.uploaded_at")
+        sort_dir = "ASC" if filters.get("sort_dir", "desc").lower() == "asc" else "DESC"
+
+        limit = int(filters.get("limit", 50))
+        offset = int(filters.get("offset", 0))
+
+        # Build query
+        select = "SELECT DISTINCT f.*"
+        if sort_field == "downloads":
+            select += ", (SELECT COUNT(*) FROM downloads d WHERE d.file_id = f.id) AS dl_count"
+        from_clause = "FROM files f"
+        if join_tags or sort_field == "downloads":
+            if join_tags:
+                from_clause += " LEFT JOIN tags t ON t.file_id = f.id"
+
+        where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        order_sql = f" ORDER BY {sort_col} {sort_dir}"
+        limit_sql = f" LIMIT {limit} OFFSET {offset}"
+
+        sql = f"{select} {from_clause}{where_sql}{order_sql}{limit_sql}"
+
+        with get_conn(self.path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_files(self, filters=None):
+        """Count files matching filters (same filters as query_files, minus sort/limit/offset)."""
+        filters = filters or {}
+        where_clauses = []
+        params = []
+        join_tags = False
+
+        status = filters.get("status", "uploaded")
+        if status:
+            where_clauses.append("f.status = ?")
+            params.append(status)
+
+        for field, op in [("name", "LIKE"), ("description", "LIKE")]:
+            val = filters.get(field)
+            if val:
+                where_clauses.append(f"f.{field} LIKE ?")
+                params.append(f"%{val}%")
+
+        if filters.get("tag"):
+            where_clauses.append("t.tag = ?")
+            params.append(filters["tag"])
+            join_tags = True
+
+        for field in ["min_size", "max_size", "min_parts", "max_parts", "since", "until"]:
+            val = filters.get(field)
+            if val is not None:
+                col_map = {
+                    "min_size": ("f.size", ">="),
+                    "max_size": ("f.size", "<="),
+                    "min_parts": ("f.total_parts", ">="),
+                    "max_parts": ("f.total_parts", "<="),
+                    "since": ("f.uploaded_at", ">="),
+                    "until": ("f.uploaded_at", "<="),
+                }
+                col, op = col_map[field]
+                where_clauses.append(f"{col} {op} ?")
+                params.append(int(val))
+
+        for field in ["encrypted", "compressed"]:
+            val = filters.get(field)
+            if val is not None:
+                where_clauses.append(f"f.{field} = ?")
+                params.append(1 if val else 0)
+
+        from_clause = "FROM files f"
+        if join_tags:
+            from_clause += " LEFT JOIN tags t ON t.file_id = f.id"
+        where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        sql = f"SELECT COUNT(DISTINCT f.id) {from_clause}{where_sql}"
+
+        with get_conn(self.path) as conn:
+            return conn.execute(sql, params).fetchone()[0]
+
+    def get_files_by_ids(self, ids):
+        """Get multiple file records by their IDs."""
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        with get_conn(self.path) as conn:
+            rows = conn.execute(
+                f"SELECT * FROM files WHERE id IN ({placeholders}) ORDER BY id",
+                ids
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def mark_deleted(self, file_id):
         with get_conn(self.path) as conn:
             conn.execute(
