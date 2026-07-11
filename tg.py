@@ -119,7 +119,15 @@ except ImportError:
 # Constants & Telegram Limits
 # ==========================================
 VERSION = 8
-DEFAULT_CONFIG_PATH = str(Path.home() / ".tg-vault.json")
+# Config path priority:
+#   1. ~/.tg-vault.json (default, created by `tg.py setup`)
+#   2. config.json (in the same directory as tg.py, useful for portable setups)
+# The first existing file is used.
+_LOCAL_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+if os.path.exists(_LOCAL_CONFIG):
+    DEFAULT_CONFIG_PATH = _LOCAL_CONFIG
+else:
+    DEFAULT_CONFIG_PATH = str(Path.home() / ".tg-vault.json")
 
 MANIFEST_PREFIX = "TG_VAULT_MANIFEST"
 DESCRIPTION_PREFIX = "TG_VAULT_DESC"
@@ -651,6 +659,7 @@ class Uploader:
 
         # Compression setup
         will_compress = compress and compress_file is not None and not should_skip_compression(file_name)
+        any_chunk_compressed = False  # track if ANY chunk was actually compressed
         if compress and not will_compress and compress_file is not None:
             print(f"📦 Compression: SKIPPED (already-compressed format: {file_name})")
         elif will_compress:
@@ -693,7 +702,7 @@ class Uploader:
                             encrypt=bool(encryptor),
                             encryption_salt=encryption_salt,
                             password_hash=password_hash,
-                            compress=will_compress,
+                            compress=any_chunk_compressed,
                             sha256_prefix=sha256_prefix,
                         )
                         if os.path.exists(resume_path):
@@ -742,24 +751,22 @@ class Uploader:
 
                     # Pipeline: raw → compress (optional) → encrypt (optional) → prepend header
                     processed = raw_chunk
+                    chunk_actually_compressed = False
 
                     if will_compress and compress_file is not None:
                         from tg_compression import compress_data
-                        processed, _ = compress_data(processed, file_name)
+                        processed, chunk_actually_compressed = compress_data(processed, file_name)
+                        if chunk_actually_compressed:
+                            any_chunk_compressed = True
 
                     iv = None
                     if encryptor:
-                        # Use deterministic IV derived from chunk index.
-                        # This is acceptable in GCM as long as (key, IV) is never reused —
-                        # and since chunk_index is unique per file, this is safe.
-                        # Using random IV per chunk would require storing all IVs in the
-                        # manifest, which would bloat it for large files.
                         iv = (part_num - 1).to_bytes(12, "big")
                         processed = encryptor.encrypt_chunk_with_iv(processed, iv)
 
                     # Prepend self-describing header (TGV1)
                     flags = 0
-                    if will_compress:
+                    if chunk_actually_compressed:
                         flags |= FLAG_COMPRESSED
                     if encryptor:
                         flags |= FLAG_ENCRYPTED
@@ -822,7 +829,7 @@ class Uploader:
             encrypt=bool(encryptor),
             encryption_salt=encryption_salt,
             password_hash=password_hash,
-            compress=will_compress,
+            compress=any_chunk_compressed,
             sha256_prefix=sha256_prefix,
         )
 
@@ -879,8 +886,19 @@ class Uploader:
                        description, hashtags,
                        encrypt=False, encryption_salt=None, password_hash=None,
                        compress=False, sha256_prefix=None):
-        """Send the manifest as the final message (reply to last part).
-        Returns (share_link, manifest_dict) or (None, None)."""
+        """Send the manifest as a TEXT message (not a file).
+
+        Text manifests are better because:
+        1. Can be edited later with editMessageText (update description/tags)
+        2. Faster (no file upload needed)
+        3. Smaller (no file overhead)
+
+        Format:
+          Line 1: TG_VAULT_MANIFEST|name|parts|sha256_prefix
+          Line 2+: JSON content
+
+        Returns (share_link, manifest_dict) or (None, None).
+        """
         manifest = {
             "name": file_name,
             "size": file_size,
@@ -895,36 +913,52 @@ class Uploader:
             "session_id": self.session_id,
             "version": VERSION,
             "created_at": time.time(),
-            # v8 features
             "encrypted": encrypt,
             "compressed": compress,
             "has_chunk_header": chunk_create_header is not None,
+            "manifest_type": "text",  # identifies this as a text manifest
         }
         if encrypt and encryption_salt is not None:
             manifest["encryption_salt"] = CryptoEncryptor.salt_to_str(encryption_salt)
             manifest["encryption_algorithm"] = "aes-256-gcm"
             manifest["encryption_kdf"] = "pbkdf2-sha512-600k"
-            manifest["password_hash"] = password_hash  # for verification only
+            manifest["password_hash"] = password_hash
         if sha256_prefix is not None:
-            # Store as base64-encoded string for JSON safety
             import base64
             manifest["sha256_prefix_b64"] = base64.b64encode(sha256_prefix).decode("ascii")
-        json_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
-        manifest_filename = sanitize_filename(f"{file_name}.manifest.json")
 
-        bot = self.bot_pool.get_next()
-        files = {"document": (manifest_filename, io.BytesIO(json_bytes))}
-        caption = truncate_caption(
-            f"{MANIFEST_PREFIX}|{file_name}|{total_parts}|{file_hash[:16]}"
-        )
-        data = {
-            "chat_id": self.config.main_channel,
-            "caption": caption,
-        }
-        if message_ids:
-            data["reply_to_message_id"] = message_ids[-1]
+        # Build text message: header line + JSON
+        header = f"{MANIFEST_PREFIX}|{file_name}|{total_parts}|{file_hash[:16]}"
+        json_str = json.dumps(manifest, ensure_ascii=False, indent=2)
+        text = header + "\n" + json_str
 
-        res = bot.request("sendDocument", data=data, files=files)
+        # Check if text fits in Telegram's 4096 char limit
+        if len(text) > 4090:
+            # Fallback: send as file (for very large manifests with many parts)
+            json_bytes = json_str.encode("utf-8")
+            manifest_filename = sanitize_filename(f"{file_name}.manifest.json")
+            bot = self.bot_pool.get_next()
+            files = {"document": (manifest_filename, io.BytesIO(json_bytes))}
+            caption = truncate_caption(header)
+            data = {
+                "chat_id": self.config.main_channel,
+                "caption": caption,
+            }
+            if message_ids:
+                data["reply_to_message_id"] = message_ids[-1]
+            res = bot.request("sendDocument", data=data, files=files)
+        else:
+            # Send as text message (preferred)
+            bot = self.bot_pool.get_next()
+            data = {
+                "chat_id": self.config.main_channel,
+                "text": text,
+                "disable_web_page_preview": True,
+            }
+            if message_ids:
+                data["reply_to_message_id"] = message_ids[-1]
+            res = bot.request("sendMessage", data=data)
+
         if not res or not res.get("ok"):
             err = res.get("description") if res else "No response"
             print(f"Error sending manifest: {err}")
@@ -1047,15 +1081,47 @@ class Downloader:
         return True
 
     def _fetch_manifest(self, chat_id, message_id):
-        """Fetch and parse the manifest message."""
+        """Fetch and parse the manifest message.
+
+        Supports both:
+        1. Text manifest (new): message text starts with TG_VAULT_MANIFEST
+        2. File manifest (old): message has a document with caption starting with TG_VAULT_MANIFEST
+        """
         print("📡 Fetching manifest...")
         copied = self._fetch_message(chat_id, message_id)
         if not copied:
             return None
 
+        # Check if it's a text manifest (new style)
+        text = copied.get("text", "")
+        if text.startswith(MANIFEST_PREFIX):
+            # Text manifest — parse directly from message text
+            lines = text.split("\n", 1)
+            header = lines[0]
+            json_str = lines[1] if len(lines) > 1 else ""
+
+            try:
+                parts = header.split("|")
+                file_name = parts[1]
+                total_parts = int(parts[2])
+                print(f"✅ Manifest found: '{file_name}' with {total_parts} parts (text)")
+            except (IndexError, ValueError):
+                print("Error: malformed manifest header.")
+                self._cleanup()
+                return None
+
+            self._cleanup()  # Delete the forwarded copy
+
+            try:
+                return json.loads(json_str)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                print(f"Error parsing manifest JSON: {e}")
+                return None
+
+        # Check if it's a file manifest (old style)
         caption = copied.get("caption", "")
         if not caption.startswith(MANIFEST_PREFIX):
-            print(f"Error: not a manifest message. caption: {caption[:100]}")
+            print(f"Error: not a manifest message.")
             self._cleanup()
             return None
 
@@ -1063,7 +1129,7 @@ class Downloader:
             parts = caption.split("|")
             file_name = parts[1]
             total_parts = int(parts[2])
-            print(f"✅ Manifest found: '{file_name}' with {total_parts} parts")
+            print(f"✅ Manifest found: '{file_name}' with {total_parts} parts (file)")
         except (IndexError, ValueError):
             print("Error: malformed manifest caption.")
             self._cleanup()
@@ -1137,18 +1203,25 @@ class Downloader:
             return None
 
     def _cleanup(self):
-        """Delete all forwarded temp messages."""
+        """Delete all forwarded temp messages. Robust — retries failed deletes."""
         with self._temp_lock:
             msgs = list(self._temp_msg_ids)
             self._temp_msg_ids.clear()
         if not msgs:
             return
+        failed = []
         for chat_id, msg_id in msgs:
             bot = self.bot_pool.get_next()
-            bot.request("deleteMessage", data={
+            res = bot.request("deleteMessage", data={
                 "chat_id": chat_id,
                 "message_id": msg_id,
             })
+            if not res or not res.get("ok"):
+                failed.append((chat_id, msg_id))
+        # Re-add failed deletions for next cleanup attempt
+        if failed:
+            with self._temp_lock:
+                self._temp_msg_ids.extend(failed)
 
     def _download_part(self, source_chat_id, msg_id, part_num):
         """Download a single part (worker function for parallel download)."""
@@ -1217,6 +1290,10 @@ class Downloader:
             out_path = os.path.join(output_dir, output) if not os.path.isabs(output) else output
         else:
             out_path = os.path.join(output_dir, sanitize_filename(file_name))
+
+        # Auto-create output directory if it doesn't exist
+        out_dir_abs = os.path.dirname(os.path.abspath(out_path))
+        os.makedirs(out_dir_abs, exist_ok=True)
 
         temp_file = out_path + ".downloading"
 
@@ -1323,7 +1400,13 @@ class Downloader:
                                         # Decompress if needed
                                         if is_compressed and decompress_file is not None:
                                             from tg_compression import decompress_data
-                                            raw = decompress_data(raw, True)
+                                            try:
+                                                raw = decompress_data(raw, True)
+                                            except Exception:
+                                                # Fallback: data wasn't actually compressed
+                                                # (bug in older versions set compressed=True
+                                                # even when gzip didn't help)
+                                                pass
                                         out_file.write(raw)
                                         next_to_write += 1
                                         progress.update(1)
@@ -1357,7 +1440,12 @@ class Downloader:
                 os.remove(out_path)
             os.rename(temp_file, out_path)
             print(f"\n✅ File saved: {out_path}")
-            self._cleanup()
+            # Final cleanup with retries — make sure ALL temp messages are deleted
+            for attempt in range(3):
+                self._cleanup()
+                if not self._temp_msg_ids:
+                    break
+                time.sleep(1)
             # Log download to database
             if self.db:
                 try:
@@ -1963,6 +2051,17 @@ def cmd_delete(args, config):
             print(f"   ⚠️ Failed to delete {mid}: {err}")
     print(f"✅ Deleted {deleted}/{len(msg_ids)} messages.")
 
+    # Also mark as deleted in database if enabled
+    db = config.get_db()
+    if db:
+        try:
+            existing = db.get_file_by_sha(manifest.get("sha256", ""))
+            if existing:
+                db.mark_deleted(existing["id"])
+                print(f"💾 Database: marked file #{existing['id']} as deleted")
+        except Exception as e:
+            print(f"⚠️ Could not update database: {e}")
+
 
 def cmd_cleanup(args, config):
     """Clean up temp channel by deleting recent messages."""
@@ -2168,6 +2267,153 @@ def cmd_db(args, config):
         else:
             print(f"   No space reclaimed (DB was already optimized)")
 
+    elif args.db_action == "find":
+        # Scan channel for latest DB backup and update config
+        print("🔍 Scanning channel for DB backup messages...")
+        bot_pool = BotPool(config.bots)
+        found_id = find_latest_db_backup(config, bot_pool, verbose=True)
+        if found_id:
+            print(f"\n✅ Found! DB backup is at message {found_id}")
+            print(f"   Config updated with new db_sync_msg_id: {found_id}")
+            print(f"   You can now run: python tg.py db restore")
+        else:
+            print("\n❌ No DB backup found in channel.")
+            print("   Run: python tg.py db sync")
+
+    elif args.db_action == "find-orphans":
+        # Scan main channel for manifest messages not in database
+        print("🔍 Scanning main channel for orphaned files...")
+        bot_pool = BotPool(config.bots)
+        if len(bot_pool) == 0:
+            print("❌ No active bots.")
+            return
+        bot = bot_pool.get_next()
+        main_channel = config.main_channel
+
+        # Get all known message_ids from DB
+        known_msg_ids = set()
+        all_files = db.list_files(limit=10000)
+        for f in all_files:
+            try:
+                ids = json.loads(f.get("message_ids", "[]"))
+                known_msg_ids.update(ids)
+            except:
+                pass
+            if f.get("manifest_msg_id"):
+                known_msg_ids.add(f["manifest_msg_id"])
+            if f.get("description_msg_id"):
+                known_msg_ids.add(f["description_msg_id"])
+
+        # Send marker to get current position
+        marker_res = bot.request("sendMessage", data={
+            "chat_id": main_channel, "text": "_orphan_scan_",
+            "disable_notification": True,
+        })
+        if not marker_res or not marker_res.get("ok"):
+            print("❌ Cannot send marker.")
+            return
+        marker_id = marker_res["result"]["message_id"]
+        bot.request("deleteMessage", data={"chat_id": main_channel, "message_id": marker_id})
+
+        # Scan backwards
+        scan_count = min(500, marker_id)
+        orphans = []
+        print(f"   Scanning last {scan_count} messages in main channel...")
+        for check_id in range(marker_id, max(0, marker_id - scan_count), -1):
+            if check_id == marker_id:
+                continue
+            if check_id in known_msg_ids:
+                continue  # Known, skip
+
+            fwd_res = bot.request("forwardMessage", data={
+                "chat_id": main_channel, "from_chat_id": main_channel,
+                "message_id": check_id, "disable_notification": True,
+            })
+            if not fwd_res or not fwd_res.get("ok"):
+                continue
+
+            fwd_msg_id = fwd_res["result"]["message_id"]
+            text = fwd_res["result"].get("text", "")
+            caption = fwd_res["result"].get("caption", "")
+            bot.request("deleteMessage", data={"chat_id": main_channel, "message_id": fwd_msg_id})
+
+            # Check if it's a manifest (text or file)
+            manifest_text = text if text.startswith(MANIFEST_PREFIX) else caption
+            if manifest_text.startswith(MANIFEST_PREFIX):
+                link = build_share_link(main_channel, check_id)
+                orphans.append((check_id, manifest_text[:80], link))
+
+        if orphans:
+            print(f"\n📋 Found {len(orphans)} orphaned manifest(s):")
+            for msg_id, cap, link in orphans:
+                print(f"   msg {msg_id}: {cap}")
+                if link:
+                    print(f"      🔗 {link}")
+            print(f"\n💡 To delete: python tg.py delete <link> --force")
+            print(f"   Or add to DB: python tg.py download <link>")
+        else:
+            print(f"\n✅ No orphans found! All manifests are in the database.")
+
+
+    elif args.db_action == "delete":
+        # Delete a file by ID from both Telegram and database
+        if not args.query:
+            print("❌ File ID required: python tg.py db delete <ID>")
+            return
+        try:
+            file_id = int(args.query)
+        except ValueError:
+            print(f"❌ Invalid file ID: {args.query}")
+            return
+
+        file_record = db.get_file_by_id(file_id)
+        if not file_record:
+            print(f"❌ No file with ID {file_id}")
+            return
+
+        print(f"📄 File: {file_record['name']} ({format_size(file_record['size'])})")
+        print(f"   Parts: {file_record['total_parts']}")
+        print(f"   Link: {file_record.get('share_link', 'N/A')}")
+
+        # Collect all message IDs to delete
+        msg_ids = []
+        if file_record.get("description_msg_id"):
+            msg_ids.append(file_record["description_msg_id"])
+        try:
+            part_ids = json.loads(file_record.get("message_ids", "[]"))
+            msg_ids.extend(part_ids)
+        except:
+            pass
+        if file_record.get("manifest_msg_id"):
+            msg_ids.append(file_record["manifest_msg_id"])
+
+        channel_id = file_record.get("main_channel") or config.main_channel
+
+        if not getattr(args, "force", False):
+            confirm = input(f"\n   Delete {len(msg_ids)} messages from Telegram + DB record? (yes/no): ")
+            if confirm.strip().lower() != "yes":
+                print("Cancelled.")
+                return
+
+        bot_pool = BotPool(config.bots)
+        deleted = 0
+        for mid in msg_ids:
+            bot = bot_pool.get_next()
+            res = bot.request("deleteMessage", data={
+                "chat_id": channel_id,
+                "message_id": mid,
+            })
+            if res and res.get("ok"):
+                deleted += 1
+            else:
+                err = res.get("description") if res else "No response"
+                print(f"   ⚠️ Failed to delete msg {mid}: {err}")
+
+        # Mark as deleted in DB
+        db.mark_deleted(file_id)
+        print(f"\n✅ Deleted {deleted}/{len(msg_ids)} messages from Telegram.")
+        print(f"💾 Database: marked file #{file_id} as deleted.")
+
 
 def _build_filters_from_args(args):
     """Build a filters dict from argparse args for query/count/download."""
@@ -2367,7 +2613,7 @@ def sync_db_to_channel(config, bot_pool=None, verbose=False):
             bot.request("deleteMessage", data={
                 "chat_id": sync_channel, "message_id": fwd_msg_id,
             })
-            if caption.startswith("TG_VAULT_DB_BACKUP") or caption.startswith("TG_VAULT_DB_MANIFEST"):
+            if caption.startswith("TG_VAULT_DB_BACKUP") or caption.startswith("TG_VAULT_DB_MANIFEST") or caption.startswith("TG_VAULT_DB_PART"):
                 bot.request("deleteMessage", data={
                     "chat_id": sync_channel, "message_id": check_id,
                 })
@@ -2514,24 +2760,95 @@ def sync_db_to_channel(config, bot_pool=None, verbose=False):
     return True
 
 
+def find_latest_db_backup(config, bot_pool=None, verbose=False):
+    """Scan the sync channel for the latest DB backup message.
+
+    Looks for messages with caption starting with:
+      - TG_VAULT_DB_BACKUP (single-part)
+      - TG_VAULT_DB_MANIFEST (multi-part manifest)
+
+    Returns the message_id of the latest backup, or None if not found.
+    Also updates config.db_sync_msg_id if found.
+    """
+    sync_channel = config.get_db_sync_channel()
+    if not sync_channel:
+        return None
+
+    if bot_pool is None:
+        bot_pool = BotPool(config.bots)
+    if len(bot_pool) == 0:
+        return None
+
+    bot = bot_pool.get_next()
+
+    # Send a marker to get the current latest message_id
+    marker_res = bot.request("sendMessage", data={
+        "chat_id": sync_channel, "text": "_db_find_marker_",
+        "disable_notification": True,
+    })
+    if not marker_res or not marker_res.get("ok"):
+        return None
+
+    marker_id = marker_res["result"]["message_id"]
+    bot.request("deleteMessage", data={
+        "chat_id": sync_channel, "message_id": marker_id,
+    })
+
+    if verbose:
+        print(f"🔍 Scanning channel for latest DB backup (checking last 200 messages)...")
+
+    # Scan backwards from marker_id
+    scan_range = min(200, marker_id)
+    for check_id in range(marker_id, max(0, marker_id - scan_range), -1):
+        if check_id == marker_id:
+            continue
+
+        fwd_res = bot.request("forwardMessage", data={
+            "chat_id": sync_channel,
+            "from_chat_id": sync_channel,
+            "message_id": check_id,
+            "disable_notification": True,
+        })
+        if not fwd_res or not fwd_res.get("ok"):
+            continue
+
+        fwd_msg_id = fwd_res["result"]["message_id"]
+        caption = fwd_res["result"].get("caption", "")
+
+        # Delete forwarded copy immediately
+        bot.request("deleteMessage", data={
+            "chat_id": sync_channel, "message_id": fwd_msg_id,
+        })
+
+        if caption.startswith("TG_VAULT_DB_BACKUP") or caption.startswith("TG_VAULT_DB_MANIFEST"):
+            if verbose:
+                print(f"   ✅ Found DB backup at msg {check_id}: {caption[:80]}")
+            # Update config with the found ID
+            config.db_sync_msg_id = check_id
+            config.db_sync_multipart = caption.startswith("TG_VAULT_DB_MANIFEST")
+            config.save()
+            return check_id
+
+    if verbose:
+        print(f"   ❌ No DB backup found in last {scan_range} messages")
+    return None
+
+
 def restore_db_from_channel(config, bot_pool=None, verbose=False):
     """Download the DB file from the sync channel and replace the local one.
+
+    This function is ROBUST — it doesn't just rely on config.db_sync_msg_id.
+    If the stored ID is stale (message was deleted), it scans the channel
+    to find the latest DB backup automatically.
 
     Supports both single-part and multi-part DB backups:
       - Single-part: message caption starts with TG_VAULT_DB_BACKUP
       - Multi-part: message caption starts with TG_VAULT_DB_MANIFEST
-        (the manifest contains message_ids of all parts)
     """
     sync_channel = config.get_db_sync_channel()
     if not sync_channel:
         if verbose:
             print("❌ No sync channel configured.")
-        return False
-
-    if not config.db_sync_msg_id:
-        if verbose:
-            print("❌ No DB sync message ID in config.")
-            print("   Run `python tg.py db sync` first to upload the DB.")
         return False
 
     if bot_pool is None:
@@ -2544,10 +2861,41 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
     bot = bot_pool.get_next()
     msg_id = config.db_sync_msg_id
 
-    if verbose:
-        print(f"📥 Fetching DB sync message {msg_id} from channel {sync_channel}...")
+    # Step 1: Try the stored msg_id first
+    if msg_id:
+        if verbose:
+            print(f"📥 Trying stored DB sync message {msg_id}...")
 
-    # Forward to get file_id and caption (same trick as downloads)
+        fwd_res = bot.request("forwardMessage", data={
+            "chat_id": sync_channel,
+            "from_chat_id": sync_channel,
+            "message_id": msg_id,
+            "disable_notification": True,
+        })
+
+        if fwd_res and fwd_res.get("ok"):
+            # Message exists! Proceed with restore.
+            return _do_restore_from_msg(config, bot, sync_channel, fwd_res, verbose)
+
+        # Message not found — fall through to scanning
+        if verbose:
+            err = fwd_res.get("description") if fwd_res else "No response"
+            print(f"⚠️ Stored message {msg_id} not found: {err}")
+            print(f"🔍 Scanning channel for latest DB backup...")
+
+    # Step 2: Scan the channel for the latest DB backup
+    found_msg_id = find_latest_db_backup(config, bot_pool, verbose)
+    if not found_msg_id:
+        if verbose:
+            print("❌ No DB backup found in channel.")
+            print("   Run `python tg.py db sync` to create a new backup.")
+        return False
+
+    # Step 3: Fetch the found message and restore
+    msg_id = found_msg_id
+    if verbose:
+        print(f"📥 Fetching DB backup at msg {msg_id}...")
+
     fwd_res = bot.request("forwardMessage", data={
         "chat_id": sync_channel,
         "from_chat_id": sync_channel,
@@ -2560,11 +2908,15 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
             print(f"❌ Failed to fetch DB message: {err}")
         return False
 
+    return _do_restore_from_msg(config, bot, sync_channel, fwd_res, verbose)
+
+
+def _do_restore_from_msg(config, bot, sync_channel, fwd_res, verbose=False):
+    """Actually restore DB from a forwarded message. Returns True/False."""
     fwd_msg_id = fwd_res["result"]["message_id"]
     caption = fwd_res["result"].get("caption", "")
     doc = fwd_res["result"].get("document")
 
-    # Determine: single-part or multi-part
     is_multipart = caption.startswith("TG_VAULT_DB_MANIFEST")
 
     if is_multipart:
@@ -2582,7 +2934,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
             print(f"   File ID: {file_id[:30]}...")
             print(f"   Manifest size: {format_size(file_size)}")
 
-        # Download the manifest JSON
         if file_size > TG_FILE_SIZE_LIMIT:
             bot.request("deleteMessage", data={"chat_id": sync_channel, "message_id": fwd_msg_id})
             if verbose:
@@ -2620,7 +2971,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
             print(f"   Expected SHA256: {expected_hash[:16]}...")
             print()
 
-        # Download each part
         db_path = config.get_db_path()
         temp_file = db_path + ".restoring"
 
@@ -2629,7 +2979,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
                 if verbose:
                     print(f"   📦 Downloading part {i}/{total_parts} (msg {part_msg_id})...")
 
-                # Forward part to get file_id
                 pfwd = bot.request("forwardMessage", data={
                     "chat_id": sync_channel,
                     "from_chat_id": sync_channel,
@@ -2665,7 +3014,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
                     os.remove(temp_file)
                     return False
 
-                # Download the part
                 p_file_res = bot.request("getFile", data={"file_id": p_file_id})
                 bot.request("deleteMessage", data={"chat_id": sync_channel, "message_id": pfwd_msg_id})
                 if not p_file_res or not p_file_res.get("ok"):
@@ -2692,7 +3040,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
                     os.remove(temp_file)
                     return False
 
-        # Verify size
         actual_size = os.path.getsize(temp_file)
         if actual_size != expected_size:
             if verbose:
@@ -2700,7 +3047,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
             os.remove(temp_file)
             return False
 
-        # Verify SHA256
         if verbose:
             print("\n   🔍 Verifying SHA256...")
         actual_hash = compute_sha256(temp_file)
@@ -2714,7 +3060,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
         if verbose:
             print(f"   ✅ SHA256 verified!")
 
-        # Backup local DB if exists, then replace
         if os.path.exists(db_path):
             backup_path = db_path + ".backup"
             os.rename(db_path, backup_path)
@@ -2751,8 +3096,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
         bot.request("deleteMessage", data={"chat_id": sync_channel, "message_id": fwd_msg_id})
         if verbose:
             print(f"❌ DB file too large ({format_size(file_size)} > 20MB).")
-            print(f"   This backup was created with an older version of tg-vault")
-            print(f"   that didn't support multi-part DB uploads.")
             print(f"   Run `python tg.py db sync` to create a new multi-part backup.")
         return False
 
@@ -2782,7 +3125,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
             print(f"❌ Download error: {e}")
         return False
 
-    # Backup local DB if it exists
     db_path = config.get_db_path()
     if os.path.exists(db_path):
         backup_path = db_path + ".backup"
@@ -2790,7 +3132,6 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
         if verbose:
             print(f"   Backed up local DB to: {backup_path}")
 
-    # Write the downloaded DB
     with open(db_path, "wb") as f:
         f.write(r.content)
 
@@ -3140,7 +3481,7 @@ Examples:
     sp = subparsers.add_parser("db", help="Database management")
     sp.add_argument("db_action", choices=["enable", "disable", "info", "list", "search", "stats",
                                           "export", "sync", "restore", "query", "download", "count",
-                                          "vacuum"],
+                                          "vacuum", "find", "find-orphans", "delete"],
                     help="Action to perform")
     sp.add_argument("query", nargs="?", help="Search query (for 'search') or file ID (for 'download')")
     sp.add_argument("--query", "-q", dest="query_opt", help="Search query (alternative, for 'search')")
@@ -3168,6 +3509,7 @@ Examples:
     sp.add_argument("--ids", help="Comma-separated file IDs to download (for 'download')")
     sp.add_argument("--all-matching", action="store_true", help="Download all files matching current filter")
     sp.add_argument("--output-dir", dest="db_output_dir", default=".", help="Output directory for downloads")
+    sp.add_argument("--force", action="store_true", help="Skip confirmation (for 'delete')")
 
     args = parser.parse_args()
 

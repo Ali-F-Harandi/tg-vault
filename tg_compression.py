@@ -24,6 +24,8 @@ SKIP_COMPRESSION_EXTENSIONS = {
     ".mp3", ".aac", ".m4a", ".ogg", ".opus", ".flac", ".wma",
     # Archives
     ".zip", ".rar", ".7z", ".gz", ".bz2", ".xz", ".tgz", ".tbz", ".txz",
+    # Comic book formats (already zip/rar based)
+    ".cbz", ".cbr", ".cb7", ".cbt", ".cba",
     # Documents (already compressed internally)
     ".pdf", ".docx", ".xlsx", ".pptx", ".epub", ".odt", ".ods", ".odp",
     # Other

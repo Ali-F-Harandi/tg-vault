@@ -44,7 +44,10 @@ tg-vault.db
 tg-vault.db-journal
 tg-vault.db-wal
 tg-vault.db-shm
+tg-vault.db.backup
+tg-vault.db.restoring
 tg-vault-export.json
+manga_upload_progress.json
 
 # Python bytecode
 __pycache__/

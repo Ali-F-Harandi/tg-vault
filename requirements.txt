@@ -1,6 +1,10 @@
 # tg-vault dependencies
 requests>=2.25.0
 
-# Optional: required for --encrypt feature (AES-256-GCM)
-# Install with: pip install cryptography
+# Encryption (AES-256-GCM)
 cryptography>=41.0.0
+
+# TUI (Terminal User Interface) — curses
+# On Linux/macOS: built into Python, no install needed
+# On Windows: requires windows-curses package
+windows-curses>=2.3; sys_platform == "win32"

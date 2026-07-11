@@ -1,0 +1,23 @@
+{
+  "bots": [
+    {
+      "token": "YOUR_BOT_TOKEN_HERE",
+      "username": "your_bot_username"
+    }
+  ],
+  "channels": {
+    "main": -1001234567890,
+    "temp": -1009876543210
+  },
+  "chunk_size_mb": 19,
+  "upload_delay": 0.3,
+  "download_delay": 0.2,
+  "parallel_workers": 4,
+  "db_enabled": true,
+  "db_path": null,
+  "db_sync_channel": null,
+  "db_sync_msg_id": null,
+  "db_sync_multipart": false,
+  "db_auto_sync": true,
+  "version": 8
+}
