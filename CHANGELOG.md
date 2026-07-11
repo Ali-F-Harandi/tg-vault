@@ -16,6 +16,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync engine (Dropbox-like folder sync, inspired by TAS)
 - FUSE mount (mount Telegram storage as a local folder, inspired by TAS)
 
+## [v8.1.0] — 2026-07-11
+
+### Changed — Project reorganization
+- **Restructured into a proper Python package** (`tg_vault/`):
+  - `tg.py` (3580 lines) split into 14 focused modules
+  - All logic now lives in `tg_vault/` (cli, commands, interactive, config,
+    bot_pool, uploader, downloader, crypto, compression, chunk_header, db,
+    db_sync, constants, utils)
+  - GUI moved to `gui/app.py` (was root-level `gui.py`)
+  - Added `pyproject.toml` with proper setuptools metadata + `tg-vault` script entry point
+  - Added `tests/test_smoke.py` with 17 smoke tests
+  - Root `tg.py` and `gui.py` kept as thin backward-compat shims so
+    `python tg.py <cmd>` and `python gui.py` keep working
+
+### Added — Documentation
+- `docs/USAGE.md` — comprehensive usage guide with all commands and flags
+- `docs/CONFIGURATION.md` — full config file reference with examples
+- `docs/SECURITY.md` — encryption design, threat model, best practices
+- Updated `docs/ARCHITECTURE.md` to reflect the new package layout
+
+### Fixed
+- `ls` command: only parse the first line of the manifest text when extracting
+  the header (previously printed the entire JSON body because `hash_prefix`
+  contained the rest of the manifest after the first `|`-split)
+- `db_search.py` example: updated to import `Database` from the new
+  `tg_vault.db` module (was `tg_db`)
+- All examples that build subprocess commands: `--config` is now placed
+  *before* the subcommand (it's a global argparse flag)
+
+### Notes
+- All 17 smoke tests pass
+- Real-world upload/download tested with a 13 MB single-part file
+  (BERSERK Ch500 PDF) and a 33 MB multi-part file (Fairy Tail Vol 5 CBZ)
+- Encrypted upload + download tested and verified (SHA256 round-trip OK)
+- DB list/search/stats/query/download tested
+
 ## [v8.0.0] — 2026-07-11
 
 Inspired by studying [TAS (Telegram as Storage)](https://github.com/ixchio/tas) — adopted the best ideas while keeping our 19 MB chunk size (which actually works for downloads, unlike TAS's 49 MB).

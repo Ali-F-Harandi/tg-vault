@@ -35,7 +35,7 @@ The setup wizard will create `~/.tg-vault.json` automatically.
 3. Use it with `--config`:
    ```bash
    python tg.py --config config.json upload file.zip
-   python tui.py --config config.json
+   python gui.py --config config.json
    ```
 
 ## Config Fields

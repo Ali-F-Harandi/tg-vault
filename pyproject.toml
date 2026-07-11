@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-vault"
+version = "8.0.0"
+description = "Telegram Bot API cloud storage — use Telegram as a personal cloud backend"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "kesafatkari" },
+]
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.25.0",
+    "cryptography>=41.0.0",
+    "windows-curses>=2.3; sys_platform == 'win32'",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: File Sharing",
+    "Topic :: Internet",
+    "Topic :: System :: Archiving :: Backup",
+]
+
+[project.scripts]
+tg-vault = "tg_vault.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Ali-F-Harandi/tg-vault"
+Issues = "https://github.com/Ali-F-Harandi/tg-vault/issues"
+
+[tool.setuptools]
+packages = ["tg_vault"]

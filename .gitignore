@@ -48,6 +48,7 @@ tg-vault.db.backup
 tg-vault.db.restoring
 tg-vault-export.json
 manga_upload_progress.json
+.proxy_settings.json
 
 # Python bytecode
 __pycache__/

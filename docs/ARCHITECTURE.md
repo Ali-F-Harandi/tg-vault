@@ -1,11 +1,17 @@
 # Architecture Overview
 
+This document describes the internal architecture of tg-vault, the rationale behind key design decisions, and how the moving pieces fit together.
+
+## High-level diagram
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                          tg-vault                                    │
 │                                                                      │
 │  ┌──────────────────┐    ┌──────────────────┐    ┌────────────────┐ │
-│  │   CLI (argparse) │ ←→ │ Interactive Menu │    │   Examples     │ │
+│  │   CLI (argparse) │ ←→ │ Interactive Menu │    │   GUI (tk)     │ │
+│  │  tg_vault/cli.py │    │tg_vault/         │    │  gui/app.py    │ │
+│  │                  │    │ interactive.py   │    │                │ │
 │  └────────┬─────────┘    └────────┬─────────┘    └────────────────┘ │
 │           │                       │                                   │
 │           └───────────┬───────────┘                                   │
@@ -16,6 +22,7 @@
 │              │  - main_channel │                                     │
 │              │  - temp_channel │                                     │
 │              │  - chunk_size   │                                     │
+│              │  - db_*         │                                     │
 │              └────────┬────────┘                                     │
 │                       ↓                                               │
 │              ┌─────────────────┐                                     │
@@ -67,7 +74,31 @@
   └──────────────────────────────────────────┘
 ```
 
-## Key Design Decisions
+## Package layout
+
+```
+tg_vault/
+├── __init__.py          # Re-exports public API
+├── __main__.py          # python -m tg_vault entry
+├── cli.py               # argparse CLI + main()
+├── commands.py          # cmd_* functions
+├── interactive.py       # Interactive menu
+├── config.py            # Config class
+├── bot_pool.py          # Bot + BotPool
+├── uploader.py          # Uploader class
+├── downloader.py        # Downloader class
+├── crypto.py            # AES-256-GCM encryptor
+├── compression.py       # Smart gzip
+├── chunk_header.py      # TGV1 header
+├── db.py                # SQLite database
+├── db_sync.py           # DB backup/restore
+├── constants.py         # VERSION + limits
+└── utils.py             # Helpers + ProgressTracker
+```
+
+Two backward-compatibility shims (`tg.py`, `gui.py`) live at the project root so that `python tg.py <cmd>` and `python gui.py` keep working after the reorganization.
+
+## Key design decisions
 
 ### 1. Why 19 MB chunks (not 20)?
 
@@ -105,7 +136,58 @@ Each upload/download session gets a unique 8-char UUID. This tag is included in 
 - Temp channel cleanup only deletes messages from the current session.
 - Easier debugging (grep for session ID in logs).
 
-## Error Handling
+### 7. Why a self-describing chunk header (TGV1)?
+
+Each chunk starts with a 40-byte binary header containing the file's SHA256 prefix, chunk index, total chunks, original size, and flags (compressed/encrypted). This means:
+- A chunk can be identified **without consulting the database**.
+- If the manifest is lost, the chunks can still be recognized and reassembled.
+- The compression/encryption flags are embedded — no need to check the manifest for every chunk.
+
+### 8. Why deterministic IVs for AES-GCM?
+
+In v8, the IV for each chunk is derived deterministically from its chunk index: `iv = (part_num - 1).to_bytes(12, "big")`. This avoids storing per-chunk IVs in the manifest. The (key, IV) pair is never reused because:
+- The key is unique per file (random 32-byte salt per encryption).
+- The chunk index is unique within a file.
+
+This is safe per NIST SP 800-38D as long as the key is never reused with the same IV.
+
+## Pipeline
+
+### Upload pipeline (per chunk)
+
+```
+raw_chunk
+   ↓
+compress_data()         (optional — skipped for already-compressed formats)
+   ↓
+encrypt_chunk_with_iv() (optional — AES-256-GCM, IV = chunk_index)
+   ↓
+prepend TGV1 header     (40 bytes: magic, version, flags, index, total, size, sha256_prefix)
+   ↓
+sendDocument            (with reply_to previous message)
+```
+
+### Download pipeline (per chunk, in parallel)
+
+```
+forwardMessage to temp channel
+   ↓
+getFile → HTTP GET
+   ↓
+deleteMessage (temp forward)
+   ↓
+strip TGV1 header       (40 bytes)
+   ↓
+decrypt_chunk()         (optional — AES-256-GCM)
+   ↓
+decompress_data()       (optional — gzip)
+   ↓
+write to .downloading file (in order)
+```
+
+After all chunks are written, the file's SHA256 is verified against the manifest.
+
+## Error handling
 
 | Error | Handling |
 |-------|----------|
@@ -115,15 +197,18 @@ Each upload/download session gets a unique 8-char UUID. This tag is included in 
 | 4xx (other) | Return error to caller, no retry |
 | KeyboardInterrupt | Save resume state, clean up temp messages |
 | SHA256 mismatch | Keep `.downloading` file for inspection |
+| Wrong encryption password | Fail-fast via password verification hash (no decryption attempt) |
+| Decryption tamper | `InvalidTag` exception → abort |
 
-## Thread Safety
+## Thread safety
 
 - `BotPool._counter` protected by `threading.Lock`
 - `Bot._last_request_time` protected by `threading.Lock` (per-bot rate limiting)
 - `Downloader._temp_msg_ids` protected by `threading.Lock`
 - `ProgressTracker.current` protected by `threading.Lock`
+- `Downloader` write loop protected by `write_lock` (per-file)
 
-## File Layout
+## File layout (transient files)
 
 ```
 ~/.tg-vault.json                    # Config file
@@ -131,4 +216,58 @@ Each upload/download session gets a unique 8-char UUID. This tag is included in 
 <filename>.downloading              # Partial download (transient)
 <filename>                          # Completed download
 <filename>.manifest.json            # Manifest (only in channel, never local)
+tg-vault.db                         # SQLite database (optional)
+tg-vault.db.backup                  # DB backup before restore (transient)
+tg-vault.db.restoring               # DB restore in progress (transient)
 ```
+
+## Manifest format
+
+The manifest is sent as a **text message** (preferred) or as a JSON file (fallback when the manifest is too large for Telegram's 4096-char text limit).
+
+Text manifest format:
+```
+TG_VAULT_MANIFEST|<filename>|<total_parts>|<sha256_prefix>
+{
+  "name": "...",
+  "size": 12345,
+  "total_parts": 4,
+  "chunk_size": 19922944,
+  "message_ids": [10, 11, 12, 13],
+  "sha256": "...",
+  "channel_id": -100...,
+  "description_msg_id": 9,
+  "description": "...",
+  "hashtags": ["tag1", "tag2"],
+  "session_id": "abcd1234",
+  "version": 8,
+  "created_at": 1234567890.123,
+  "encrypted": false,
+  "compressed": false,
+  "has_chunk_header": true,
+  "manifest_type": "text",
+  "manifest_message_id": 14
+}
+```
+
+If encrypted, additional fields:
+```json
+{
+  "encryption_salt": "<base64>",
+  "encryption_algorithm": "aes-256-gcm",
+  "encryption_kdf": "pbkdf2-sha512-600k",
+  "password_hash": "<hex>",
+  "sha256_prefix_b64": "<base64>"
+}
+```
+
+## Database schema
+
+Four tables (see `tg_vault/db.py` for full DDL):
+
+- **`files`** — one row per uploaded file (with v8 encryption/compression fields)
+- **`downloads`** — download history
+- **`chunks`** — per-chunk metadata (mirror of `message_ids`, queryable)
+- **`tags`** — many-to-many tag organization
+
+Indexes on `sha256`, `name`, `uploaded_at`, `status`, `encrypted`, and on the `tags` and `chunks` foreign keys for fast lookups.

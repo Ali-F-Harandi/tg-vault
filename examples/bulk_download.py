@@ -48,12 +48,15 @@ def main():
         sys.exit(1)
 
     # Build command
-    cmd = [sys.executable, str(tg_script), "download"] + links
+    # NOTE: --config is a global flag, must come before the subcommand.
+    cmd = [sys.executable, str(tg_script)]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    cmd.append("download")
+    cmd.extend(links)
     cmd.extend(["--output-dir", args.output_dir])
     if args.resume:
         cmd.append("--resume")
-    if args.config:
-        cmd.extend(["--config", args.config])
 
     print(f"📥 Downloading {len(links)} files to {args.output_dir}/")
     print()

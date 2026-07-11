@@ -65,7 +65,11 @@ def main():
             sys.exit(1)
 
     # Build command
-    cmd = [sys.executable, str(tg_script), "upload", args.file, "--encrypt"]
+    # NOTE: --config is a global flag, must come before the subcommand.
+    cmd = [sys.executable, str(tg_script)]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    cmd.extend(["upload", args.file, "--encrypt"])
     if args.password:
         cmd.extend(["--password", args.password])
     elif password:
@@ -75,8 +79,6 @@ def main():
         cmd.extend(["--desc", args.desc])
     if args.tag:
         cmd.extend(["--tag", args.tag])
-    if args.config:
-        cmd.extend(["--config", args.config])
 
     print(f"📤 Uploading encrypted file: {args.file}")
     print(f"   Algorithm: AES-256-GCM")

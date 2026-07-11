@@ -17,9 +17,9 @@ import json
 import sys
 from pathlib import Path
 
-# Allow importing tg_db from parent directory
+# Allow importing the tg_vault package from parent directory
 sys.path.insert(0, str(Path(__file__).parent.parent))
-import tg_db  # noqa: E402
+from tg_vault.db import Database  # noqa: E402
 
 
 def main():
@@ -48,7 +48,7 @@ def main():
         sys.exit(1)
 
     # Search
-    db = tg_db.Database(db_path)
+    db = Database(db_path)
     results = db.search_files(args.query)
 
     if not results:

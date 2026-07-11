@@ -13,10 +13,15 @@ Stores metadata for every uploaded file:
 
 The database path is stored in the JSON config file. If database is
 enabled, every upload/download automatically updates the DB.
+
+Schema (v8):
+  - ``files``: one row per uploaded file (with v8 encryption/compression fields)
+  - ``downloads``: download history
+  - ``chunks``: per-chunk metadata (mirror of message_ids, queryable)
+  - ``tags``: many-to-many tag organization
 """
 
 import json
-import os
 import sqlite3
 import time
 from contextlib import contextmanager

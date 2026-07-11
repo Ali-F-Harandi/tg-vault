@@ -16,11 +16,11 @@ source venv/bin/activate   # Linux/Mac
 
 # Install dependencies
 pip install -r requirements.txt
-pip install -e .   # (if you add setup.py later)
+pip install -e .   # install tg-vault as an editable package
 
 # Run tests
-python tg.py test
-```
+python -m pytest tests/ -v
+python tg.py test   # integration test with real bot (needs config)
 
 ## Code Style
 
@@ -34,29 +34,49 @@ python tg.py test
 
 ```
 tg-vault/
-├── tg.py                  # Main script (single-file design — keep it that way)
-├── README.md              # English documentation
-├── README.fa.md           # Persian documentation
-├── CHANGELOG.md           # Version history
-├── LICENSE                # MIT
-├── requirements.txt       # Python dependencies
-├── .gitignore             # Ignores config files, resume state, etc.
-├── docs/
-│   ├── TELEGRAM_LIMITS.md # Reference for Telegram Bot API limits
-│   └── ARCHITECTURE.md    # Architecture overview & design decisions
-└── examples/
-    ├── parallel_uploads.py
-    ├── backup_directory.py
-    └── download_all.py
+├── tg.py                    # Backward-compat shim → tg_vault.cli
+├── gui.py                   # Backward-compat shim → gui.app
+├── pyproject.toml           # Python package metadata
+├── requirements.txt
+├── README.md / README.fa.md # Bilingual README (keep in sync!)
+├── CHANGELOG.md
+├── LICENSE                  # MIT
+├── .gitignore
+│
+├── tg_vault/                # Main package (all logic lives here)
+│   ├── __init__.py          # Re-exports public API
+│   ├── __main__.py          # python -m tg_vault entry
+│   ├── cli.py               # argparse CLI
+│   ├── commands.py          # cmd_* functions
+│   ├── interactive.py       # Interactive menu
+│   ├── config.py            # Config class
+│   ├── bot_pool.py          # Bot + BotPool
+│   ├── uploader.py          # Uploader
+│   ├── downloader.py        # Downloader (parallel chunks)
+│   ├── crypto.py            # AES-256-GCM
+│   ├── compression.py       # Smart gzip
+│   ├── chunk_header.py      # TGV1 header
+│   ├── db.py                # SQLite database
+│   ├── db_sync.py           # DB backup/restore
+│   ├── constants.py         # VERSION + limits
+│   └── utils.py             # Helpers + ProgressTracker
+│
+├── gui/
+│   └── app.py               # tkinter GUI
+│
+├── examples/                # Ready-to-use scripts
+├── docs/                    # Architecture, usage, security, limits
+└── tests/
+    └── test_smoke.py        # Smoke tests (run with: pytest tests/)
 ```
 
 ## Design Principles
 
-1. **Single-file main script** — `tg.py` should remain a single file. If it grows too large, refactor into a package, but keep the CLI entrypoint simple.
+1. **Modular package** — all logic lives in the `tg_vault/` package. The root `tg.py` and `gui.py` are thin shims for backward compatibility. New code should `import tg_vault`.
 
 2. **Bot-token-only** — Never require `api_id`/`api_hash` or MTProto for the main flow. Local Bot API Server support can be added as an optional feature.
 
-3. **No external dependencies beyond `requests`** — keep the dependency surface minimal.
+3. **Minimal dependencies** — only `requests` (required) and `cryptography` (optional, for `--encrypt`).
 
 4. **Concurrency-safe by default** — every operation should be safe to run in parallel with other instances.
 
@@ -91,9 +111,10 @@ Examples:
 ## Ideas for Contributions
 
 ### High-impact
-- 🔐 **AES-256-GCM client-side encryption** — encrypt chunks before upload, decrypt after download. Manifest should store the IV but not the key (user provides key).
 - 🌐 **Local Bot API Server support** — add `api_url` field per bot in config, so users can self-host and get 2 GB uploads + unlimited downloads.
 - 🐳 **Docker image + REST API** — wrap tg-vault in a Flask/FastAPI service, expose `/upload` and `/download?url=...` endpoints.
+- 🔄 **Sync engine** — Dropbox-like folder sync (one-way or two-way) between a local directory and a Telegram channel.
+- 🗔️ **FUSE mount** — mount Telegram storage as a local filesystem.
 
 ### Medium-impact
 - 🎬 **HTTP Range streaming** — for video files, allow partial download with Range requests (useful for media servers).

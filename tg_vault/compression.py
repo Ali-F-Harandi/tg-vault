@@ -1,7 +1,5 @@
 """
-Compression module for tg-vault — smart gzip with format-aware bypass.
-
-Inspired by TAS (https://github.com/ixchio/tas).
+Smart gzip compression for tg-vault, with format-aware bypass.
 
 Features:
   - Skips compression for already-compressed formats (jpg, mp4, zip, etc.)
@@ -10,7 +8,6 @@ Features:
 """
 
 import gzip
-import io
 import os
 
 # File extensions that are already compressed — skip compression for these
@@ -130,9 +127,20 @@ def decompress_file(input_path: str, output_path: str, was_compressed: bool, chu
                 fout.write(chunk)
         return
 
-    with gzip.open(input_path, "rb") as fin, open(output_path, "wb") as fout:
-        while True:
-            chunk = fin.read(chunk_size)
-            if not chunk:
-                break
-            fout.write(chunk)
+    with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
+        try:
+            import io
+            with gzip.GzipFile(fileobj=fin) as gz:
+                while True:
+                    chunk = gz.read(chunk_size)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+        except Exception:
+            # Fallback: data wasn't actually compressed
+            fin.seek(0)
+            while True:
+                chunk = fin.read(chunk_size)
+                if not chunk:
+                    break
+                fout.write(chunk)

@@ -1,7 +1,5 @@
 """
-Encryption module for tg-vault — AES-256-GCM with PBKDF2 key derivation.
-
-Inspired by TAS (https://github.com/ixchio/tas) but adapted for Python.
+AES-256-GCM encryption for tg-vault, with PBKDF2 key derivation.
 
 Features:
   - AES-256-GCM authenticated encryption
@@ -17,20 +15,13 @@ for both encryption and decryption. The manifest stores:
   - salt (random, 32 bytes, base64-encoded in JSON)
   - password verification hash (so we can fail-fast on wrong password)
   - IV per chunk (random, 12 bytes, base64-encoded in JSON)
-
-Security notes:
-  - PBKDF2 with 600k iterations takes ~1 second on a modern CPU — this is
-    intentional, to make brute-force attacks expensive.
-  - GCM mode provides both confidentiality and integrity.
-  - The auth tag is verified automatically during decryption; if a chunk
-    has been tampered with, decryption fails with InvalidTag.
 """
 
 import base64
 import hashlib
 import hmac
-import os
 import secrets
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -153,15 +144,15 @@ class Encryptor:
         Each chunk is (chunk_size + TAG_LENGTH) bytes in the encrypted file.
         The caller must provide the IVs in the correct order.
         """
-        # Each encrypted chunk = plaintext_length + TAG_LENGTH bytes
-        # But the LAST chunk may be shorter. So we read chunks of (chunk_size + TAG_LENGTH)
-        # and the last read will return whatever's left.
         encrypted_chunk_size = chunk_size + TAG_LENGTH
         with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
             for iv in ivs:
                 encrypted_chunk = fin.read(encrypted_chunk_size)
                 if not encrypted_chunk:
-                    raise ValueError(f"Encrypted file ended before all IVs were consumed. {len(ivs) - ivs.index(iv)} IVs remaining.")
+                    raise ValueError(
+                        f"Encrypted file ended before all IVs were consumed. "
+                        f"{len(ivs) - ivs.index(iv)} IVs remaining."
+                    )
                 plaintext = self.decrypt_chunk(encrypted_chunk, iv)
                 fout.write(plaintext)
 

@@ -37,15 +37,18 @@ def main():
         sys.exit(1)
 
     # Build command
-    cmd = [sys.executable, str(tg_script), "upload"] + args.files
+    # NOTE: --config is a global flag, must come before the subcommand.
+    cmd = [sys.executable, str(tg_script)]
+    if args.config:
+        cmd.extend(["--config", args.config])
+    cmd.append("upload")
+    cmd.extend(args.files)
     if args.desc:
         cmd.extend(["--desc", args.desc])
     if args.tag:
         cmd.extend(["--tag", args.tag])
     if args.resume:
         cmd.append("--resume")
-    if args.config:
-        cmd.extend(["--config", args.config])
 
     print(f"📤 Uploading {len(args.files)} files...")
     print(f"   Command: {' '.join(cmd[:6])} ... ({len(args.files)} files)")
