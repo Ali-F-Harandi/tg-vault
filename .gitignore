@@ -40,6 +40,16 @@ config.json
 *.resume.json
 *.downloading
 *.manifest.json
+tg-vault.db
+tg-vault.db-journal
+tg-vault.db-wal
+tg-vault.db-shm
+tg-vault-export.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Local test files
 test_data/

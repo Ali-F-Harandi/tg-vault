@@ -50,13 +50,20 @@ To download, you only need the **link to the manifest message** — `tg-vault` r
 
 - ✅ **Multi-bot support** with round-robin rotation (multiply throughput)
 - ✅ **Parallel chunk download** (uses all bots concurrently)
+- ✅ **Bulk upload & download** (multiple files / multiple links in one command)
+- ✅ **AES-256-GCM encryption** (optional, zero-knowledge, with PBKDF2 600k iterations)
+- ✅ **Smart gzip compression** (skips already-compressed formats like .mp4, .zip)
+- ✅ **Self-describing chunk headers** (TGV1 magic — each chunk identifies itself)
+- ✅ **SQLite database** for metadata storage (search, stats, export)
 - ✅ **Per-bot rate limiting** (FloodWait-safe, ~50 ms min interval)
 - ✅ **Connection pooling** (`requests.Session` per bot)
 - ✅ **Description message** before parts (name + size + SHA256 + custom text + hashtags)
 - ✅ **Manifest message** after parts (acts as "end" marker + reply to last part)
 - ✅ **Resume** for both upload and download
 - ✅ **Filename & caption length validation/sanitization**
+- ✅ **Hashtag sanitization** (Telegram-compatible: `sci-fi` → `sci_fi`, `2026` → `_2026`)
 - ✅ **Graceful `Ctrl+C` cleanup** (deletes temp messages)
+- ✅ **Improved progress bar** (instantaneous speed sampled every 200ms, like TAS)
 - ✅ **Config file** (`~/.tg-vault.json`) for bots, channels, defaults
 - ✅ **CLI commands + interactive menu**
 - ✅ **Concurrency-safe** (each session has unique UUID tag)
@@ -287,39 +294,242 @@ Default location: `~/.tg-vault.json`
   "upload_delay": 0.3,
   "download_delay": 0.2,
   "parallel_workers": 4,
-  "version": 6
+  "db_enabled": true,
+  "db_path": "/home/user/.tg-vault.db",
+  "version": 7
 }
 ```
 
-## Web App (GitHub Pages)
+## Bulk Upload & Download
 
-tg-vault also ships a **fully client-side web app** — no backend, no server, no install. Your bot token never leaves your browser.
+tg-vault supports **bulk operations** natively — pass multiple files or multiple links in a single command.
 
-🌐 **Live demo**: https://kesafatkari.github.io/tg-vault/
+### Bulk Upload
 
-Features:
-- 🔐 Settings stored in `localStorage` (browser only, never sent anywhere except Telegram)
-- 📤 Drag-and-drop file upload with live progress
-- 📥 Download by manifest link with SHA256 verification
-- 📋 Show manifest info without downloading
-- 🌙 Dark theme, mobile-friendly
-- 🚀 Works on any static host (GitHub Pages, Netlify, Cloudflare Pages, or just open the HTML file locally)
+Upload multiple files in one command. The same `--desc` and `--tag` flags apply to all files:
 
-To run locally:
 ```bash
-# Just open the file in your browser
-open docs/index.html
-# Or serve it locally
-python3 -m http.server 8000 -d docs
-# Then visit http://localhost:8000
+# Upload multiple files
+python tg.py upload file1.zip file2.zip file3.zip --desc "Backup batch" --tag backup,2026
+
+# Use shell wildcards (expanded by your shell)
+python tg.py upload *.mp4 --tag movies
+python tg.py upload photos/*.jpg --desc "Vacation photos"
 ```
+
+The script uploads them sequentially (one after another) and shows a summary at the end:
+
+```
+============================================================
+📊 Bulk upload summary (3 files):
+============================================================
+  ✅ file1.zip: https://t.me/c/.../42
+  ✅ file2.zip: https://t.me/c/.../46
+  ❌ file3.zip: failed
+3/3 files uploaded successfully.
+```
+
+### Bulk Download
+
+Download multiple files by passing multiple manifest links:
+
+```bash
+# Multiple links
+python tg.py download https://t.me/c/.../42 https://t.me/c/.../43 https://t.me/c/.../44
+
+# Read links from a text file (one per line; # comments allowed)
+python tg.py download --links-file my_links.txt --output-dir ~/Downloads
+
+# Combine both
+python tg.py download https://t.me/c/.../42 --links-file more_links.txt --output-dir ~/Downloads
+```
+
+Sample `my_links.txt`:
+```
+# Backup links — downloaded 2026-07-11
+https://t.me/c/1234567890/42
+https://t.me/c/1234567890/46
+# this line is a comment
+https://t.me/c/1234567890/50
+```
+
+The `--output` flag is only allowed for single-file downloads (otherwise the original filename from the manifest is used).
+
+## Database (SQLite)
+
+tg-vault can optionally store metadata for every uploaded file in a local SQLite database. This lets you:
+
+- 🔍 **Search** by name, description, or hashtag
+- 📊 **View statistics** (total files, total size, download count, top files)
+- 📋 **List** all files with their share links
+- 📤 **Export** to JSON for backup or migration
+- 🔄 **Track downloads** (when each file was last downloaded)
+
+The database is **enabled by default** when you run `tg.py setup`. You can also enable it manually:
+
+```bash
+python tg.py db enable                                  # enable + create DB
+python tg.py db info                                    # show DB info + stats
+python tg.py db list --limit 20                         # list recent files
+python tg.py db search "movie"                          # search by name/desc/tags
+python tg.py db search "backup" --limit 10              # limit results
+python tg.py db stats                                   # show statistics only
+python tg.py db export --output backup.json             # export all records to JSON
+python tg.py db disable                                 # disable (file kept on disk)
+```
+
+### What's stored in the database?
+
+For every uploaded file:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Auto-increment row ID |
+| `name` | Original filename |
+| `size` | File size in bytes |
+| `sha256` | SHA256 hash (unique identifier) |
+| `total_parts` | Number of chunks |
+| `chunk_size` | Chunk size used (usually 19 MB) |
+| `message_ids` | JSON array of Telegram message IDs (parts + manifest) |
+| `manifest_msg_id` | Message ID of the manifest message |
+| `description_msg_id` | Message ID of the description message |
+| `description` | User-provided description text |
+| `hashtags` | JSON array of hashtags |
+| `main_channel` | Channel ID where file is stored |
+| `temp_channel` | Channel ID used for temp forwards |
+| `share_link` | `t.me/c/.../N` link to the manifest |
+| `session_id` | 8-char UUID of the upload session |
+| `uploaded_at` | Unix timestamp of upload |
+| `last_accessed_at` | Unix timestamp of last download |
+| `status` | `uploaded` / `deleted` / `corrupted` |
+
+A separate `downloads` table logs each download event (file_id, output_path, sha256_verified, downloaded_at).
+
+### Database location
+
+The database path is determined in this order:
+1. `db_path` field in config file (explicit)
+2. Next to the config file: `~/.tg-vault.db`
+3. Override at any time: `python tg.py db enable` then edit config
+
+The path is stored in the config file so the script knows where to find it on every run.
+
+### Automatic logging
+
+When the database is enabled:
+- **Every upload** automatically inserts a record (or updates if SHA256 already exists)
+- **Every download** automatically logs to the `downloads` table and updates `last_accessed_at`
+- If the database file is missing, it's created automatically on first use
+
+## Encryption & Compression (v8)
+
+tg-vault v8 adds **optional client-side encryption** and **smart compression**, inspired by [TAS](https://github.com/ixchio/tas).
+
+### Encryption (AES-256-GCM)
+
+Encrypt files end-to-end with a password. Even if someone gains access to your Telegram channel, they cannot read your files without the password.
+
+```bash
+# Upload with encryption (will prompt for password)
+python tg.py upload secret.txt --encrypt
+
+# Or specify password via flag
+python tg.py upload secret.txt --encrypt --password "my-password"
+
+# Or via env var (recommended for scripts)
+export TG_VAULT_PASSWORD="my-password"
+python tg.py upload secret.txt --encrypt
+
+# Download (will prompt for password)
+python tg.py download https://t.me/c/.../42
+
+# Or specify password
+python tg.py download https://t.me/c/.../42 --password "my-password"
+```
+
+**Technical details:**
+- **Algorithm:** AES-256-GCM (authenticated encryption — detects tampering)
+- **Key derivation:** PBKDF2-HMAC-SHA512 with 600,000 iterations (OWASP 2025 recommendation)
+- **Salt:** 32 bytes random, stored in manifest
+- **IV:** 12 bytes, deterministic per chunk (derived from chunk index) — avoids storing per-chunk IVs
+- **Password verification:** Separate hash stored in manifest, so wrong passwords fail fast (before any download)
+- **Key NEVER stored** — only the user knows it
+
+**What's stored in the manifest:**
+- `encrypted: true`
+- `encryption_algorithm: "aes-256-gcm"`
+- `encryption_kdf: "pbkdf2-sha512-600k"`
+- `encryption_salt: <base64>`
+- `password_hash: <hex>` (verification only — NOT the encryption key)
+
+### Compression (smart gzip)
+
+Compression is **on by default**. tg-vault automatically skips compression for already-compressed formats (jpg, mp4, zip, etc.) to save CPU.
+
+```bash
+# Default: compression on
+python tg.py upload file.txt
+
+# Disable compression
+python tg.py upload file.txt --no-compress
+```
+
+**Skipped extensions:** `.jpg`, `.png`, `.mp4`, `.mkv`, `.zip`, `.7z`, `.gz`, `.pdf`, `.docx`, `.epub`, and [many more](tg_compression.py).
+
+For other files, gzip level 6 is used. If compression doesn't actually reduce size, the original is kept.
+
+### Self-describing chunk headers (TGV1)
+
+Each chunk starts with a 40-byte header containing:
+- Magic bytes (`TGV1`)
+- Version
+- Flags (compressed? encrypted?)
+- Chunk index + total chunks
+- Original file size
+- First 16 bytes of file SHA256
+
+This lets you identify a chunk without consulting the database — useful for forensic recovery.
+
+### v8 chunk pipeline
+
+```
+Original file → split into 19MB chunks
+              → compress each chunk (gzip, optional)
+              → encrypt each chunk (AES-256-GCM, optional)
+              → prepend TGV1 header (40 bytes)
+              → upload to Telegram
+```
+
+On download, the pipeline reverses:
+```
+Download chunk → strip TGV1 header
+               → decrypt (AES-256-GCM)
+               → decompress (gzip)
+               → write to file
+               → verify SHA256 of original file
+```
+
+## Channel Type: Channel vs Group vs Topic Group
+
+For tg-vault's use case (storing files as bot messages), here's how the three types compare:
+
+| Type | Pros | Cons | Recommended? |
+|------|------|------|-------------|
+| **Private Channel** | ✅ Clean one-way message stream; persistent; everyone sees all messages; no member-introduced noise | Only one message stream (no categorization) | ✅ **Yes — default** |
+| **Group (regular)** | Two-way chat | Members can delete others' messages; gets noisy | ❌ No |
+| **Group with Topics** | ✅ Can use one topic per file/category for organization | Requires `message_thread_id` in every API call (not currently supported by tg-vault) | ⚠️ Not yet supported |
+
+**Bottom line:** Use a **private channel** for storage. If you want categorization, use **separate channels per category** (e.g. `movies`, `photos`, `documents`) and switch between them via `python tg.py channels set main <id>`.
 
 ## Examples
 
 See [`examples/`](examples/) for:
-- [`parallel_uploads.py`](examples/parallel_uploads.py) — Upload multiple files concurrently
+- [`parallel_uploads.py`](examples/parallel_uploads.py) — Upload multiple files concurrently (subprocess-per-file)
+- [`bulk_upload.py`](examples/bulk_upload.py) — Bulk upload via the new `upload file1 file2 ...` syntax
+- [`bulk_download.py`](examples/bulk_download.py) — Bulk download via the new `download link1 link2 ...` syntax
 - [`backup_directory.py`](examples/backup_directory.py) — Recursively back up a directory
 - [`download_all.py`](examples/download_all.py) — Download all manifest files from a channel
+- [`db_search.py`](examples/db_search.py) — Search the SQLite database from a script
 
 ## Comparison With Similar Projects
 

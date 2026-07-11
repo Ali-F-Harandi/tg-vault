@@ -75,10 +75,50 @@ except ImportError:
     print("Error: 'requests' not installed. Install with: pip install requests")
     sys.exit(1)
 
+# Database module (same directory)
+try:
+    from tg_db import Database
+except ImportError:
+    # Allow tg.py to run even if tg_db.py is missing (db features disabled)
+    Database = None
+
+# Encryption module (optional — only needed for --encrypt)
+try:
+    from tg_crypto import Encryptor as CryptoEncryptor, is_encryption_available
+except ImportError:
+    CryptoEncryptor = None
+    is_encryption_available = lambda: False  # noqa: E731
+
+# Compression module (optional — graceful degradation)
+try:
+    from tg_compression import compress_file, decompress_file, should_skip_compression
+except ImportError:
+    compress_file = None
+    decompress_file = None
+    should_skip_compression = lambda f: True  # noqa: E731 — skip if unavailable
+
+# Chunk header module (optional)
+try:
+    from tg_chunk_header import (
+        create_header as chunk_create_header,
+        parse_header as chunk_parse_header,
+        is_chunk_with_header,
+        HEADER_SIZE as CHUNK_HEADER_SIZE,
+        FLAG_COMPRESSED,
+        FLAG_ENCRYPTED,
+    )
+except ImportError:
+    chunk_create_header = None
+    chunk_parse_header = None
+    is_chunk_with_header = lambda d: False  # noqa: E731
+    CHUNK_HEADER_SIZE = 0
+    FLAG_COMPRESSED = 0
+    FLAG_ENCRYPTED = 0
+
 # ==========================================
 # Constants & Telegram Limits
 # ==========================================
-VERSION = 6
+VERSION = 8
 DEFAULT_CONFIG_PATH = str(Path.home() / ".tg-vault.json")
 
 MANIFEST_PREFIX = "TG_VAULT_MANIFEST"
@@ -261,7 +301,11 @@ def build_share_link(chat_id, message_id):
 
 
 class ProgressTracker:
-    """Thread-safe progress bar with speed/ETA."""
+    """Thread-safe progress bar with speed/ETA calculation.
+
+    Inspired by TAS: calculates speed every 200ms based on bytes-delta,
+    giving a more responsive "current speed" rather than cumulative average.
+    """
 
     def __init__(self, total, prefix=""):
         self.total = total
@@ -270,11 +314,22 @@ class ProgressTracker:
         self.start_time = time.time()
         self._lock = threading.Lock()
         self._last_print = 0
+        # TAS-style speed sampling
+        self._speed_sample_time = self.start_time
+        self._speed_sample_value = 0
+        self._current_speed = 0  # bytes per second (instantaneous)
 
     def update(self, n=1):
         with self._lock:
             self.current += n
             now = time.time()
+            # Sample speed every 200ms (like TAS)
+            elapsed_since_sample = now - self._speed_sample_time
+            if elapsed_since_sample >= 0.2:
+                delta = self.current - self._speed_sample_value
+                self._current_speed = (delta / elapsed_since_sample) if elapsed_since_sample > 0 else 0
+                self._speed_sample_time = now
+                self._speed_sample_value = self.current
             # Throttle print to 10 Hz
             if now - self._last_print < 0.1 and self.current < self.total:
                 return
@@ -289,15 +344,22 @@ class ProgressTracker:
         filled = int(bar_len * self.current // self.total)
         bar = "█" * filled + "░" * (bar_len - filled)
 
-        elapsed = time.time() - self.start_time
-        if self.current > 0 and elapsed > 0:
-            speed = self.current / elapsed
-            eta = (self.total - self.current) / speed if speed > 0 else 0
-            speed_str = format_speed(speed)
+        # Use instantaneous speed (sampled) instead of cumulative average
+        speed_str = format_speed(self._current_speed)
+
+        # ETA based on instantaneous speed, fallback to average
+        if self._current_speed > 0:
+            eta = (self.total - self.current) / self._current_speed
             eta_str = format_eta(eta)
         else:
-            speed_str = "—"
-            eta_str = "—"
+            # Fallback to cumulative average
+            elapsed = time.time() - self.start_time
+            if self.current > 0 and elapsed > 0:
+                avg_speed = self.current / elapsed
+                eta = (self.total - self.current) / avg_speed if avg_speed > 0 else 0
+                eta_str = format_eta(eta)
+            else:
+                eta_str = "—"
 
         print(f"\r{self.prefix} |{bar}| {self.current}/{self.total} "
               f"({percent:.1f}%) {speed_str} ETA:{eta_str}    ",
@@ -323,6 +385,9 @@ class Config:
         self.upload_delay = float(data.get("upload_delay", DEFAULT_UPLOAD_DELAY))
         self.download_delay = float(data.get("download_delay", DEFAULT_DOWNLOAD_DELAY))
         self.parallel_workers = int(data.get("parallel_workers", DEFAULT_PARALLEL_WORKERS))
+        # Database settings
+        self.db_enabled = bool(data.get("db_enabled", False))
+        self.db_path = data.get("db_path")  # None → default location
 
     @classmethod
     def load(cls, path=None):
@@ -343,6 +408,8 @@ class Config:
             "upload_delay": self.upload_delay,
             "download_delay": self.download_delay,
             "parallel_workers": self.parallel_workers,
+            "db_enabled": self.db_enabled,
+            "db_path": self.db_path,
             "version": VERSION,
         }
         with open(self.path, "w", encoding="utf-8") as f:
@@ -357,6 +424,26 @@ class Config:
         if self.chunk_size > TG_FILE_SIZE_LIMIT:
             errors.append(f"chunk_size_mb too large (max {TG_FILE_SIZE_LIMIT // (1024*1024)} MB)")
         return errors
+
+    # ─────────────── Database helpers ───────────────
+
+    def get_db_path(self):
+        """Resolve the database path with priority:
+          1. config.db_path (explicit)
+          2. alongside the config file: <config_dir>/tg-vault.db
+          3. ~/.tg-vault.db
+        """
+        if self.db_path:
+            return os.path.expanduser(self.db_path)
+        # Default: next to config file
+        config_dir = os.path.dirname(os.path.abspath(self.path))
+        return os.path.join(config_dir, "tg-vault.db")
+
+    def get_db(self):
+        """Return a Database instance if enabled, else None."""
+        if not self.db_enabled or Database is None:
+            return None
+        return Database(self.get_db_path())
 
 
 # ==========================================
@@ -489,16 +576,32 @@ class BotPool:
 # Uploader
 # ==========================================
 class Uploader:
-    """Upload a file as a chain of reply-linked chunks + manifest."""
+    """Upload a file as a chain of reply-linked chunks + manifest.
 
-    def __init__(self, config, bot_pool):
+    v8 features (inspired by TAS):
+      - Optional AES-256-GCM encryption (zero-knowledge)
+      - Optional smart compression (skips already-compressed formats)
+      - Self-describing chunk header (TGV1 magic)
+    """
+
+    def __init__(self, config, bot_pool, db=None):
         self.config = config
         self.bot_pool = bot_pool
+        self.db = db  # optional Database instance
         self.session_id = uuid.uuid4().hex[:8]
         self._interrupted = False
 
-    def upload(self, file_path, description="", hashtags=None, resume=False):
-        """Upload file with optional description + hashtags."""
+    def upload(self, file_path, description="", hashtags=None, resume=False,
+               encrypt=False, password=None, compress=True):
+        """Upload file with optional description + hashtags.
+
+        Args:
+            encrypt: If True, encrypt chunks with AES-256-GCM using `password`.
+            password: Password for encryption (required if encrypt=True).
+            compress: If True, gzip-compress chunks (skips already-compressed formats).
+
+        Returns a dict with keys: share_link, manifest (full manifest dict).
+        """
         if not os.path.exists(file_path):
             print(f"Error: file not found: {file_path}")
             return None
@@ -509,21 +612,49 @@ class Uploader:
                   "Telegram Bot API max is 2 GB even with Local Bot API Server.")
             return None
 
-        total_parts = max(1, math.ceil(file_size / self.config.chunk_size))
         file_name = os.path.basename(file_path)
         file_name = sanitize_filename(file_name)
         hashtags = hashtags or []
         resume_path = f"{file_name}.resume.json"
 
-        print(f"📦 File: {file_name}")
+        # Encryption setup
+        encryptor = None
+        encryption_salt = None
+        password_hash = None
+        if encrypt:
+            if not is_encryption_available():
+                print("❌ Encryption requires 'cryptography' library. Install with: pip install cryptography")
+                return None
+            if not password:
+                print("❌ Encryption requires a password. Use --password or set TG_VAULT_PASSWORD env var.")
+                return None
+            encryptor = CryptoEncryptor(password)
+            encryption_salt = encryptor.salt
+            password_hash = encryptor.get_password_hash(password)
+            print(f"🔐 Encryption: ENABLED (AES-256-GCM, PBKDF2 600k iterations)")
+            print(f"   Salt: {encryptor.salt_to_str(encryption_salt)[:24]}...")
+            print(f"   Password hash: {password_hash[:16]}...")
+
+        # Compression setup
+        will_compress = compress and compress_file is not None and not should_skip_compression(file_name)
+        if compress and not will_compress and compress_file is not None:
+            print(f"📦 Compression: SKIPPED (already-compressed format: {file_name})")
+        elif will_compress:
+            print(f"📦 Compression: ENABLED (gzip level 6)")
+
+        total_parts = max(1, math.ceil(file_size / self.config.chunk_size))
+        print(f"\n📦 File: {file_name}")
         print(f"   Size: {format_size(file_size)}")
         print(f"   Parts: {total_parts}")
-        print(f"   Session: {self.session_id}\n")
+        print(f"   Session: {self.session_id}")
 
-        # SHA256
-        print("🔍 Computing SHA256...")
+        # SHA256 (computed on ORIGINAL file, before any processing)
+        print("\n🔍 Computing SHA256 of original file...")
         file_hash = compute_sha256(file_path)
-        print(f"✅ SHA256: {file_hash}\n")
+        print(f"✅ SHA256: {file_hash}")
+
+        # First 16 bytes of SHA256 for chunk headers
+        sha256_prefix = bytes.fromhex(file_hash)[:16]
 
         # Resume state
         message_ids = []
@@ -540,11 +671,16 @@ class Uploader:
                     message_ids = old.get("message_ids", [])
                     desc_msg_id = old.get("description_msg_id")
                     if len(message_ids) >= total_parts:
-                        print("✅ All parts already uploaded. Sending manifest only.")
-                        share_link = self._send_manifest(
+                        print("\n✅ All parts already uploaded. Sending manifest only.")
+                        share_link, manifest_dict = self._send_manifest(
                             file_name, file_size, total_parts,
                             message_ids, file_hash, desc_msg_id,
-                            description, hashtags
+                            description, hashtags,
+                            encrypt=bool(encryptor),
+                            encryption_salt=encryption_salt,
+                            password_hash=password_hash,
+                            compress=will_compress,
+                            sha256_prefix=sha256_prefix,
                         )
                         if os.path.exists(resume_path):
                             os.remove(resume_path)
@@ -552,16 +688,19 @@ class Uploader:
                             self._print_summary(file_name, file_size, total_parts,
                                                 file_hash, message_ids, desc_msg_id,
                                                 share_link)
-                        return share_link
+                            if self.db and manifest_dict:
+                                self._log_to_db(manifest_dict, share_link)
+                                print(f"💾 Database updated: {self.config.get_db_path()}")
+                            return {"share_link": share_link, "manifest": manifest_dict}
                     elif len(message_ids) > 0:
                         start_part = len(message_ids) + 1
                         prev_msg_id = message_ids[-1]
-                        print(f"▶️ Resuming from part {start_part} "
-                              f"({len(message_ids)} parts already uploaded)\n")
+                        print(f"\n▶️ Resuming from part {start_part} "
+                              f"({len(message_ids)} parts already uploaded)")
                 else:
-                    print("⚠️ Hash or name mismatch. Starting fresh.\n")
+                    print("\n⚠️ Hash or name mismatch. Starting fresh.")
             except Exception as e:
-                print(f"⚠️ Failed to read resume state ({e}). Starting fresh.\n")
+                print(f"\n⚠️ Failed to read resume state ({e}). Starting fresh.")
 
         # Send description (if starting fresh)
         if start_part == 1:
@@ -582,13 +721,47 @@ class Uploader:
                 for part_num in range(start_part, total_parts + 1):
                     if self._interrupted:
                         raise KeyboardInterrupt
-                    chunk = f.read(self.config.chunk_size)
+                    raw_chunk = f.read(self.config.chunk_size)
+
+                    # Pipeline: raw → compress (optional) → encrypt (optional) → prepend header
+                    processed = raw_chunk
+
+                    if will_compress and compress_file is not None:
+                        from tg_compression import compress_data
+                        processed, _ = compress_data(processed, file_name)
+
+                    iv = None
+                    if encryptor:
+                        # Use deterministic IV derived from chunk index.
+                        # This is acceptable in GCM as long as (key, IV) is never reused —
+                        # and since chunk_index is unique per file, this is safe.
+                        # Using random IV per chunk would require storing all IVs in the
+                        # manifest, which would bloat it for large files.
+                        iv = (part_num - 1).to_bytes(12, "big")
+                        processed = encryptor.encrypt_chunk_with_iv(processed, iv)
+
+                    # Prepend self-describing header (TGV1)
+                    flags = 0
+                    if will_compress:
+                        flags |= FLAG_COMPRESSED
+                    if encryptor:
+                        flags |= FLAG_ENCRYPTED
+                    if chunk_create_header is not None:
+                        header = chunk_create_header(
+                            chunk_index=part_num - 1,
+                            total_chunks=total_parts,
+                            original_size=file_size,
+                            sha256_prefix=sha256_prefix,
+                            flags=flags,
+                        )
+                        processed = header + processed
+
                     part_name = sanitize_filename(
                         f"{file_name}.part{part_num:04d}of{total_parts:04d}"
                     )
 
                     bot = self.bot_pool.get_next()
-                    files = {"document": (part_name, chunk)}
+                    files = {"document": (part_name, processed)}
                     caption = truncate_caption(
                         f"📦 part {part_num}/{total_parts} | {file_name} | "
                         f"#{self.session_id}"
@@ -625,10 +798,15 @@ class Uploader:
 
         # Send manifest
         print("\n📋 Sending manifest...")
-        share_link = self._send_manifest(
+        share_link, manifest_dict = self._send_manifest(
             file_name, file_size, total_parts,
             message_ids, file_hash, desc_msg_id,
-            description, hashtags
+            description, hashtags,
+            encrypt=bool(encryptor),
+            encryption_salt=encryption_salt,
+            password_hash=password_hash,
+            compress=will_compress,
+            sha256_prefix=sha256_prefix,
         )
 
         # Clean up resume state
@@ -638,7 +816,12 @@ class Uploader:
         if share_link:
             self._print_summary(file_name, file_size, total_parts,
                                 file_hash, message_ids, desc_msg_id, share_link)
-        return share_link
+            # Log to database if enabled
+            if self.db and manifest_dict:
+                self._log_to_db(manifest_dict, share_link)
+                print(f"💾 Database updated: {self.config.get_db_path()}")
+            return {"share_link": share_link, "manifest": manifest_dict}
+        return None
 
     def _send_description(self, file_name, file_size, total_parts,
                           file_hash, description, hashtags):
@@ -672,8 +855,11 @@ class Uploader:
 
     def _send_manifest(self, file_name, file_size, total_parts,
                        message_ids, file_hash, desc_msg_id,
-                       description, hashtags):
-        """Send the manifest as the final message (reply to last part)."""
+                       description, hashtags,
+                       encrypt=False, encryption_salt=None, password_hash=None,
+                       compress=False, sha256_prefix=None):
+        """Send the manifest as the final message (reply to last part).
+        Returns (share_link, manifest_dict) or (None, None)."""
         manifest = {
             "name": file_name,
             "size": file_size,
@@ -688,7 +874,20 @@ class Uploader:
             "session_id": self.session_id,
             "version": VERSION,
             "created_at": time.time(),
+            # v8 features
+            "encrypted": encrypt,
+            "compressed": compress,
+            "has_chunk_header": chunk_create_header is not None,
         }
+        if encrypt and encryption_salt is not None:
+            manifest["encryption_salt"] = CryptoEncryptor.salt_to_str(encryption_salt)
+            manifest["encryption_algorithm"] = "aes-256-gcm"
+            manifest["encryption_kdf"] = "pbkdf2-sha512-600k"
+            manifest["password_hash"] = password_hash  # for verification only
+        if sha256_prefix is not None:
+            # Store as base64-encoded string for JSON safety
+            import base64
+            manifest["sha256_prefix_b64"] = base64.b64encode(sha256_prefix).decode("ascii")
         json_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
         manifest_filename = sanitize_filename(f"{file_name}.manifest.json")
 
@@ -708,10 +907,12 @@ class Uploader:
         if not res or not res.get("ok"):
             err = res.get("description") if res else "No response"
             print(f"Error sending manifest: {err}")
-            return None
+            return None, None
 
         manifest_msg_id = res["result"]["message_id"]
-        return build_share_link(self.config.main_channel, manifest_msg_id)
+        manifest["manifest_message_id"] = manifest_msg_id
+        share_link = build_share_link(self.config.main_channel, manifest_msg_id)
+        return share_link, manifest
 
     def _save_resume(self, path, file_name, file_hash, message_ids, desc_msg_id):
         data = {
@@ -740,6 +941,23 @@ class Uploader:
         print(f"   {share_link}")
         print("=" * 60)
 
+    def _log_to_db(self, manifest, share_link):
+        """Insert a record into the database. Silent on errors."""
+        if not self.db:
+            return
+        try:
+            # Check if file already exists (by SHA256)
+            existing = self.db.get_file_by_sha(manifest["sha256"])
+            if existing:
+                # Update share_link, status
+                self.db.update_share_link(existing["id"], share_link)
+                return existing["id"]
+            return self.db.insert_file(manifest, share_link,
+                                        temp_channel=self.config.temp_channel)
+        except Exception as e:
+            print(f"⚠️ Database log failed: {e}")
+            return None
+
 
 # ==========================================
 # Downloader (with parallel chunk download)
@@ -747,16 +965,21 @@ class Uploader:
 class Downloader:
     """Download a file from its manifest link, with parallel chunks."""
 
-    def __init__(self, config, bot_pool):
+    def __init__(self, config, bot_pool, db=None):
         self.config = config
         self.bot_pool = bot_pool
+        self.db = db  # optional Database instance
         self.session_id = uuid.uuid4().hex[:8]
         self._temp_msg_ids = []  # (chat_id, msg_id) tuples
         self._temp_lock = threading.Lock()
         self._interrupted = False
 
-    def download(self, link, resume=False, output=None, output_dir="."):
-        """Download file from manifest link."""
+    def download(self, link, resume=False, output=None, output_dir=".", password=None):
+        """Download file from manifest link.
+
+        Args:
+            password: Required if manifest indicates encryption.
+        """
         print(f"\n🌐 Link: {link}")
         print(f"🆔 Download session: {self.session_id}")
 
@@ -772,7 +995,7 @@ class Downloader:
         if not manifest:
             return False
 
-        return self._download_from_manifest(manifest, resume, output, output_dir)
+        return self._download_from_manifest(manifest, resume, output, output_dir, password=password)
 
     def info(self, link):
         """Show manifest info without downloading."""
@@ -920,18 +1143,53 @@ class Downloader:
             print(f"\n  Error in part {part_num}: {e}")
             return part_num, None
 
-    def _download_from_manifest(self, manifest, resume=False, output=None, output_dir="."):
-        """Download all parts in parallel and assemble."""
+    def _download_from_manifest(self, manifest, resume=False, output=None, output_dir=".",
+                                  password=None):
+        """Download all parts in parallel and assemble.
+
+        Args:
+            password: Required if manifest indicates encryption.
+        """
         file_name = manifest["name"]
         expected_size = manifest["size"]
         total_parts = manifest["total_parts"]
         message_ids = manifest["message_ids"]
         expected_hash = manifest["sha256"]
         source_chat_id = manifest["channel_id"]
+        is_encrypted = manifest.get("encrypted", False)
+        is_compressed = manifest.get("compressed", False)
+        has_chunk_header = manifest.get("has_chunk_header", False)
 
         if len(message_ids) != total_parts:
             print(f"Error: manifest inconsistent: {len(message_ids)} ids for {total_parts} parts")
             return False
+
+        # Encryption setup
+        encryptor = None
+        if is_encrypted:
+            if not is_encryption_available():
+                print("❌ This file is encrypted. Install cryptography: pip install cryptography")
+                return False
+            if not password:
+                # Try env var
+                password = os.environ.get("TG_VAULT_PASSWORD")
+                if not password:
+                    import getpass
+                    print("🔐 This file is encrypted with AES-256-GCM.")
+                    password = getpass.getpass("Enter password: ")
+            # Verify password
+            stored_hash = manifest.get("password_hash")
+            if stored_hash and not CryptoEncryptor.verify_password_hash(password, stored_hash):
+                print("❌ Wrong password (verification hash mismatch).")
+                return False
+            salt = CryptoEncryptor.salt_from_str(manifest["encryption_salt"])
+            encryptor = CryptoEncryptor(password, salt=salt)
+            print(f"🔐 Decryption: ENABLED (AES-256-GCM)")
+
+        if is_compressed:
+            print(f"📦 Decompression: ENABLED (gzip)")
+        if has_chunk_header:
+            print(f"🏷️  Self-describing chunks: ENABLED (TGV1 header)")
 
         # Determine output path
         if output:
@@ -1024,7 +1282,28 @@ class Downloader:
                                 # Write any parts that are ready in order
                                 with write_lock:
                                     while next_to_write in pending:
-                                        out_file.write(pending.pop(next_to_write))
+                                        raw = pending.pop(next_to_write)
+                                        # Strip header if present
+                                        if has_chunk_header and is_chunk_with_header(raw):
+                                            raw = raw[CHUNK_HEADER_SIZE:]
+                                        # Decrypt if needed
+                                        if encryptor:
+                                            # AESGCM ciphertext includes tag at end
+                                            # We need to know the IV. For simplicity in v8,
+                                            # we derive IV deterministically from chunk index
+                                            # (counter mode). For true random IV, would need
+                                            # to store IVs in manifest.
+                                            iv = (next_to_write - 1).to_bytes(12, "big")
+                                            try:
+                                                raw = encryptor.decrypt_chunk(raw, iv)
+                                            except Exception as e:
+                                                print(f"\n❌ Decryption failed for part {next_to_write}: {e}")
+                                                return False
+                                        # Decompress if needed
+                                        if is_compressed and decompress_file is not None:
+                                            from tg_compression import decompress_data
+                                            raw = decompress_data(raw, True)
+                                        out_file.write(raw)
                                         next_to_write += 1
                                         progress.update(1)
 
@@ -1058,6 +1337,18 @@ class Downloader:
             os.rename(temp_file, out_path)
             print(f"\n✅ File saved: {out_path}")
             self._cleanup()
+            # Log download to database
+            if self.db:
+                try:
+                    existing = self.db.get_file_by_sha(expected_hash)
+                    if existing:
+                        self.db.log_download(existing["id"], out_path, True)
+                    else:
+                        # File not in DB — insert with what we know from manifest
+                        file_id = self.db.insert_file(manifest, "", temp_channel=manifest.get("channel_id"))
+                        self.db.log_download(file_id, out_path, True)
+                except Exception as e:
+                    print(f"⚠️ Database log failed: {e}")
             return True
         else:
             print(f"❌ SHA256 mismatch!")
@@ -1114,7 +1405,7 @@ def cmd_setup(args, config):
 
     # Step 1: Bot token
     print("─" * 55)
-    print("Step 1/3 — Bot token")
+    print("Step 1/4 — Bot token")
     print("─" * 55)
     print("Get a token from @BotFather (https://t.me/BotFather):")
     print("  1. Send /newbot to @BotFather")
@@ -1142,7 +1433,7 @@ def cmd_setup(args, config):
 
     # Step 2: Main channel
     print("\n" + "─" * 55)
-    print("Step 2/3 — Main channel")
+    print("Step 2/4 — Main channel")
     print("─" * 55)
     print("Create a Telegram channel (private recommended), then:")
     print("  1. Add your bot as administrator")
@@ -1197,7 +1488,7 @@ def cmd_setup(args, config):
 
     # Step 3: Temp channel
     print("\n" + "─" * 55)
-    print("Step 3/3 — Temp channel (optional)")
+    print("Step 3/4 — Temp channel (optional)")
     print("─" * 55)
     print("A separate temp channel keeps your main channel clean.")
     print("The bot uses it for temporary forwarded messages during downloads.")
@@ -1208,10 +1499,32 @@ def cmd_setup(args, config):
         temp_channel = main_channel
         print(f"   Using main channel as temp: {temp_channel}")
 
+    # Step 4: Database
+    print("\n" + "─" * 55)
+    print("Step 4/4 — Database (optional, recommended)")
+    print("─" * 55)
+    print("A SQLite database stores metadata for every uploaded file:")
+    print("  name, size, SHA256, parts, message IDs, description, hashtags,")
+    print("  share link, timestamps, download history.")
+    print()
+    db_choice = input("Enable database? [Y/n]: ").strip().lower()
+    db_enabled = db_choice != "n"
+    db_path = None
+    if db_enabled:
+        default_db = os.path.join(os.path.dirname(os.path.abspath(config.path)), "tg-vault.db")
+        db_input = input(f"Database path [default: {default_db}]: ").strip()
+        if db_input:
+            db_path = os.path.expanduser(db_input)
+        else:
+            db_path = default_db
+        print(f"   Database will be created at: {db_path}")
+
     # Save
     config.bots = [{"token": token, "username": username}]
     config.main_channel = main_channel
     config.temp_channel = temp_channel
+    config.db_enabled = db_enabled
+    config.db_path = db_path
     config.save()
 
     print("\n" + "=" * 55)
@@ -1220,6 +1533,8 @@ def cmd_setup(args, config):
     print(f"   Bot: @{username}")
     print(f"   Main channel: {main_channel}")
     print(f"   Temp channel: {temp_channel}")
+    if db_enabled:
+        print(f"   Database: {db_path}")
     print("=" * 55)
 
     # Test
@@ -1318,16 +1633,65 @@ def cmd_upload(args, config):
             print(f"   Original: {raw}")
             print(f"   Sanitized: {hashtags}")
 
-    uploader = Uploader(config, bot_pool)
-    share_link = uploader.upload(
-        args.file,
-        description=args.desc or "",
-        hashtags=hashtags,
-        resume=args.resume
-    )
-    if share_link:
-        print(f"\n💡 To download:")
-        print(f"   python tg.py download \"{share_link}\"")
+    db = config.get_db()
+    if db:
+        print(f"💾 Database: {config.get_db_path()}")
+
+    # Encryption
+    encrypt = getattr(args, "encrypt", False)
+    password = getattr(args, "password", None) or os.environ.get("TG_VAULT_PASSWORD")
+    if encrypt and not password:
+        import getpass
+        print("🔐 Encryption enabled. Enter a password.")
+        password = getpass.getpass("Password: ")
+        confirm = getpass.getpass("Confirm: ")
+        if password != confirm:
+            print("❌ Passwords don't match.")
+            return
+
+    compress = not getattr(args, "no_compress", False)
+
+    # Collect file list (supports glob expansion and multiple files)
+    files = list(args.files)
+    if not files:
+        print("❌ No files specified.")
+        return
+
+    uploader = Uploader(config, bot_pool, db=db)
+
+    # Bulk upload
+    results = []
+    total = len(files)
+    for i, file_path in enumerate(files, 1):
+        print(f"\n{'=' * 60}")
+        print(f"📤 Uploading file {i}/{total}: {file_path}")
+        print(f"{'=' * 60}")
+        result = uploader.upload(
+            file_path,
+            description=args.desc or "",
+            hashtags=hashtags,
+            resume=args.resume,
+            encrypt=encrypt,
+            password=password,
+            compress=compress,
+        )
+        results.append((file_path, result))
+
+    # Summary
+    print(f"\n{'=' * 60}")
+    print(f"📊 Bulk upload summary ({total} files):")
+    print(f"{'=' * 60}")
+    success_count = 0
+    for file_path, result in results:
+        if result and result.get("share_link"):
+            success_count += 1
+            print(f"  ✅ {os.path.basename(file_path)}: {result['share_link']}")
+        else:
+            print(f"  ❌ {file_path}: failed")
+    print(f"\n{success_count}/{total} files uploaded successfully.")
+    if success_count > 0:
+        print(f"\n💡 To download any file:")
+        print(f"   python tg.py download \"<link>\"")
 
 
 def cmd_download(args, config):
@@ -1342,18 +1706,55 @@ def cmd_download(args, config):
         print("❌ No active bots.")
         return
 
-    downloader = Downloader(config, bot_pool)
-    try:
-        success = downloader.download(
-            args.link,
-            resume=args.resume,
-            output=args.output,
-            output_dir=args.output_dir
-        )
-        sys.exit(0 if success else 1)
-    except ValueError as e:
-        print(f"❌ {e}")
+    db = config.get_db()
+    if db:
+        print(f"💾 Database: {config.get_db_path()}")
+
+    # Collect links (supports multiple links and --links-file)
+    links = list(args.links)
+    if args.links_file:
+        try:
+            with open(args.links_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        links.append(line)
+        except OSError as e:
+            print(f"❌ Cannot read links file: {e}")
+            sys.exit(1)
+
+    if not links:
+        print("❌ No links specified.")
         sys.exit(1)
+
+    downloader = Downloader(config, bot_pool, db=db)
+
+    # Bulk download
+    total = len(links)
+    success_count = 0
+    for i, link in enumerate(links, 1):
+        print(f"\n{'=' * 60}")
+        print(f"📥 Downloading file {i}/{total}: {link}")
+        print(f"{'=' * 60}")
+        try:
+            success = downloader.download(
+                link,
+                resume=args.resume,
+                output=args.output if total == 1 else None,  # only allow --output for single file
+                output_dir=args.output_dir,
+                password=getattr(args, "password", None),
+            )
+            if success:
+                success_count += 1
+        except ValueError as e:
+            print(f"❌ {e}")
+
+    # Summary
+    print(f"\n{'=' * 60}")
+    print(f"📊 Bulk download summary ({total} files):")
+    print(f"{'=' * 60}")
+    print(f"{success_count}/{total} files downloaded successfully.")
+    sys.exit(0 if success_count == total else 1)
 
 
 def cmd_info(args, config):
@@ -1581,6 +1982,114 @@ def cmd_cleanup(args, config):
 
 
 # ==========================================
+# Database commands
+# ==========================================
+def cmd_db(args, config):
+    """Database management commands."""
+    # Special case: 'enable' doesn't require DB to be already enabled
+    if args.db_action == "enable":
+        config.db_enabled = True
+        if not config.db_path:
+            config.db_path = config.get_db_path()
+        config.save()
+        # Initialize the database file
+        if Database:
+            Database(config.get_db_path())
+            print(f"✅ Database enabled: {config.get_db_path()}")
+        else:
+            print("❌ Database module not available (tg_db.py missing)")
+        return
+
+    # All other actions require DB to be enabled
+    db = config.get_db()
+    if db is None:
+        print("❌ Database is not enabled.")
+        print("   Run: python tg.py db enable")
+        return
+
+    elif args.db_action == "disable":
+        config.db_enabled = False
+        config.save()
+        print("✅ Database disabled. (File kept on disk.)")
+        print(f"   To re-enable: python tg.py db enable")
+        return
+
+    elif args.db_action == "info":
+        path = config.get_db_path()
+        if not os.path.exists(path):
+            print(f"❌ Database file does not exist yet: {path}")
+            print("   It will be created automatically on first upload.")
+            return
+        size = os.path.getsize(path)
+        print(f"📍 Database: {path}")
+        print(f"   Size: {format_size(size)}")
+        print(f"   Enabled: {'yes' if config.db_enabled else 'no'}")
+        stats = db.stats()
+        print(f"\n📊 Stats:")
+        print(f"   Files: {stats['total_files']}")
+        print(f"   Total size: {format_size(stats['total_size'])}")
+        print(f"   Total downloads: {stats['total_downloads']}")
+        if stats["top_files"]:
+            print(f"\n   Top downloaded files:")
+            for f in stats["top_files"]:
+                print(f"     • {f['name']} ({format_size(f['size'])}) — {f['dl_count']} downloads")
+
+    elif args.db_action == "list":
+        limit = args.limit or 50
+        rows = db.list_files(limit=limit, status="uploaded")
+        if not rows:
+            print("No files in database.")
+            return
+        print(f"📋 Files in database ({len(rows)} shown):")
+        print(f"{'─' * 80}")
+        print(f"{'ID':<4} {'Name':<30} {'Size':<10} {'Parts':<6} {'Date':<20} {'Link'}")
+        print(f"{'─' * 80}")
+        for r in rows:
+            date = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["uploaded_at"]))
+            name = r["name"][:30]
+            link = r["share_link"] or ""
+            print(f"{r['id']:<4} {name:<30} {format_size(r['size']):<10} {r['total_parts']:<6} {date:<20} {link}")
+
+    elif args.db_action == "search":
+        # Support both positional and --query
+        query = args.query or getattr(args, "query_opt", None)
+        if not query:
+            print("❌ Search query required: python tg.py db search <query>")
+            return
+        rows = db.search_files(query)
+        if not rows:
+            print(f"No files matching '{query}'.")
+            return
+        print(f"🔍 Search results for '{query}' ({len(rows)} found):")
+        print(f"{'─' * 80}")
+        for r in rows:
+            date = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["uploaded_at"]))
+            print(f"  #{r['id']}  {r['name']}  ({format_size(r['size'])})  {date}")
+            if r["description"]:
+                print(f"         {r['description'][:80]}")
+            if r["share_link"]:
+                print(f"         🔗 {r['share_link']}")
+
+    elif args.db_action == "stats":
+        stats = db.stats()
+        print("📊 Database statistics:")
+        print(f"   Total files: {stats['total_files']}")
+        print(f"   Total size:  {format_size(stats['total_size'])}")
+        print(f"   Total downloads: {stats['total_downloads']}")
+        if stats["top_files"]:
+            print(f"\n   Top downloaded files:")
+            for f in stats["top_files"]:
+                print(f"     • {f['name']} ({format_size(f['size'])}) — {f['dl_count']} downloads")
+
+    elif args.db_action == "export":
+        if not args.output:
+            default = "tg-vault-export.json"
+            args.output = default
+        n = db.export_json(args.output)
+        print(f"✅ Exported {n} records to {args.output}")
+
+
+# ==========================================
 # Interactive Menu
 # ==========================================
 def interactive_menu(config_path):
@@ -1591,40 +2100,52 @@ def interactive_menu(config_path):
         print("    tg-vault — Telegram Cloud Storage")
         print("=" * 55)
         print(f"   bots: {len(config.bots)} | channel: {config.main_channel or '?'}")
+        print(f"   db: {'✅' if config.db_enabled else '❌'}")
         print("=" * 55)
-        print("1. Upload file")
+        print("1. Upload file(s)")
         print("2. Upload file (resume)")
-        print("3. Download by link")
+        print("3. Download by link(s)")
         print("4. Show file info")
         print("5. List recent files")
         print("6. Delete a file")
-        print("7. Setup wizard (bot + channels)")
+        print("7. Setup wizard (bot + channels + db)")
         print("8. Add bot")
         print("9. Set channel")
         print("10. Test connectivity")
         print("11. Cleanup temp channel")
-        print("12. Exit")
+        print("12. Database: list/search/stats")
+        print("13. Exit")
 
         choice = input("\nChoice: ").strip()
 
         if choice == "1":
-            path = input("File path: ").strip().strip('"').strip("'")
+            paths_raw = input("File path(s) — space-separated for bulk: ").strip()
+            if not paths_raw:
+                continue
+            # Split by space, strip quotes
+            import shlex
+            try:
+                paths = shlex.split(paths_raw)
+            except ValueError:
+                paths = paths_raw.split()
             desc = input("Description (optional): ").strip()
             tags = input("Hashtags (comma-separated, optional): ").strip()
             raw_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             hashtags = sanitize_hashtags(raw_tags) if raw_tags else []
             if raw_tags and hashtags != raw_tags:
                 print(f"⚠️ Hashtags sanitized: {raw_tags} → {hashtags}")
-            if not path:
-                continue
             errors = config.validate()
             if errors:
                 for e in errors:
                     print(f"❌ {e}")
                 continue
             bot_pool = BotPool(config.bots)
-            uploader = Uploader(config, bot_pool)
-            uploader.upload(path, description=desc, hashtags=hashtags)
+            db = config.get_db()
+            uploader = Uploader(config, bot_pool, db=db)
+            args_mock = argparse.Namespace(
+                files=paths, desc=desc, tag=tags, resume=False
+            )
+            cmd_upload(args_mock, config)
 
         elif choice == "2":
             path = input("File path: ").strip().strip('"').strip("'")
@@ -1636,24 +2157,37 @@ def interactive_menu(config_path):
                     print(f"❌ {e}")
                 continue
             bot_pool = BotPool(config.bots)
-            uploader = Uploader(config, bot_pool)
+            db = config.get_db()
+            uploader = Uploader(config, bot_pool, db=db)
             uploader.upload(path, resume=True)
 
         elif choice == "3":
-            link = input("Manifest link: ").strip()
-            if not link:
+            links_raw = input("Manifest link(s) — space-separated for bulk: ").strip()
+            if not links_raw:
                 continue
+            import shlex
+            try:
+                links = shlex.split(links_raw)
+            except ValueError:
+                links = links_raw.split()
+            output_dir = input("Output directory (default: .): ").strip() or "."
             errors = config.validate()
             if errors:
                 for e in errors:
                     print(f"❌ {e}")
                 continue
             bot_pool = BotPool(config.bots)
-            downloader = Downloader(config, bot_pool)
-            try:
-                downloader.download(link, resume=True)
-            except ValueError as e:
-                print(f"❌ {e}")
+            db = config.get_db()
+            downloader = Downloader(config, bot_pool, db=db)
+            for i, link in enumerate(links, 1):
+                if len(links) > 1:
+                    print(f"\n{'=' * 60}")
+                    print(f"📥 Downloading file {i}/{len(links)}: {link}")
+                    print(f"{'=' * 60}")
+                try:
+                    downloader.download(link, resume=True, output_dir=output_dir)
+                except ValueError as e:
+                    print(f"❌ {e}")
 
         elif choice == "4":
             link = input("Manifest link: ").strip()
@@ -1719,6 +2253,39 @@ def interactive_menu(config_path):
             cmd_cleanup(argparse.Namespace(max_count=count), config)
 
         elif choice == "12":
+            # Database submenu
+            if not config.db_enabled:
+                print("❌ Database not enabled.")
+                enable = input("Enable now? (y/N): ").strip().lower()
+                if enable == "y":
+                    cmd_db(argparse.Namespace(db_action="enable", query=None, limit=50, output=None), config)
+                continue
+            print("\n--- Database ---")
+            print("a. List files")
+            print("b. Search")
+            print("c. Stats")
+            print("d. Info")
+            print("e. Export to JSON")
+            sub = input("Choice: ").strip().lower()
+            if sub == "a":
+                limit = input("Limit (default 50): ").strip()
+                try:
+                    limit = int(limit) if limit else 50
+                except ValueError:
+                    limit = 50
+                cmd_db(argparse.Namespace(db_action="list", query=None, limit=limit, output=None), config)
+            elif sub == "b":
+                q = input("Search query: ").strip()
+                cmd_db(argparse.Namespace(db_action="search", query=q, limit=50, output=None), config)
+            elif sub == "c":
+                cmd_db(argparse.Namespace(db_action="stats", query=None, limit=50, output=None), config)
+            elif sub == "d":
+                cmd_db(argparse.Namespace(db_action="info", query=None, limit=50, output=None), config)
+            elif sub == "e":
+                out = input("Output file (default: tg-vault-export.json): ").strip() or "tg-vault-export.json"
+                cmd_db(argparse.Namespace(db_action="export", query=None, limit=50, output=out), config)
+
+        elif choice == "13":
             print("Goodbye!")
             break
         else:
@@ -1741,8 +2308,28 @@ Examples:
   tg.py channels set main -1001234567890
   tg.py channels set temp -1009876543210
   tg.py test
+
+  # Single file
   tg.py upload movie.mp4 --desc "Backup" --tag movies,2026
   tg.py download https://t.me/c/1234567890/42
+
+  # Bulk upload (multiple files)
+  tg.py upload file1.zip file2.zip file3.zip --desc "Backup batch"
+  tg.py upload *.mp4 --tag movies
+
+  # Bulk download (multiple links)
+  tg.py download https://t.me/c/.../42 https://t.me/c/.../43 https://t.me/c/.../44
+  tg.py download --links-file my_links.txt --output-dir ~/Downloads
+
+  # Database
+  tg.py db enable                                  # enable DB
+  tg.py db info                                    # show DB info + stats
+  tg.py db list --limit 20                         # list recent files
+  tg.py db search "movie"                          # search by name/desc/tags
+  tg.py db stats                                   # show statistics only
+  tg.py db export -o backup.json                   # export all records
+
+  # Other
   tg.py info    https://t.me/c/1234567890/42
   tg.py ls      --limit 10
   tg.py delete  https://t.me/c/1234567890/42 --force
@@ -1774,19 +2361,26 @@ Examples:
     sp.add_argument("name", nargs="?", choices=["main", "temp"])
     sp.add_argument("value", nargs="?")
 
-    # upload
-    sp = subparsers.add_parser("upload", help="Upload a file")
-    sp.add_argument("file", help="File path")
-    sp.add_argument("--desc", "-d", help="Description text")
-    sp.add_argument("--tag", "-t", help="Hashtags (comma-separated)")
+    # upload — supports multiple files for bulk upload
+    sp = subparsers.add_parser("upload", help="Upload one or more files (bulk upload supported)")
+    sp.add_argument("files", nargs="+", help="One or more file paths (supports wildcards)")
+    sp.add_argument("--desc", "-d", help="Description text (applied to all files)")
+    sp.add_argument("--tag", "-t", help="Hashtags (comma-separated, applied to all files)")
     sp.add_argument("--resume", "-r", action="store_true", help="Resume interrupted upload")
+    sp.add_argument("--encrypt", "-e", action="store_true",
+                    help="Encrypt chunks with AES-256-GCM (requires --password or TG_VAULT_PASSWORD env var)")
+    sp.add_argument("--password", help="Password for encryption (or set TG_VAULT_PASSWORD env var)")
+    sp.add_argument("--no-compress", action="store_true",
+                    help="Disable gzip compression (compression is on by default)")
 
-    # download
-    sp = subparsers.add_parser("download", help="Download by manifest link")
-    sp.add_argument("link", help="Manifest message link")
+    # download — supports multiple links for bulk download
+    sp = subparsers.add_parser("download", help="Download one or more files (bulk download supported)")
+    sp.add_argument("links", nargs="+", help="One or more manifest links")
+    sp.add_argument("--links-file", "-f", help="Text file containing one link per line (in addition to CLI args)")
     sp.add_argument("--resume", "-r", action="store_true", help="Resume interrupted download")
-    sp.add_argument("--output", "-o", help="Output filename (default: original name)")
+    sp.add_argument("--output", "-o", help="Output filename (only valid for single-file download)")
     sp.add_argument("--output-dir", default=".", help="Output directory (default: .)")
+    sp.add_argument("--password", help="Password for decryption (or set TG_VAULT_PASSWORD env var)")
 
     # info
     sp = subparsers.add_parser("info", help="Show manifest info without downloading")
@@ -1807,6 +2401,15 @@ Examples:
     # cleanup
     sp = subparsers.add_parser("cleanup", help="Clean up temp channel")
     sp.add_argument("--max-count", type=int, default=100)
+
+    # db — database management
+    sp = subparsers.add_parser("db", help="Database management")
+    sp.add_argument("db_action", choices=["enable", "disable", "info", "list", "search", "stats", "export"],
+                    help="Action to perform")
+    sp.add_argument("query", nargs="?", help="Search query (for 'search')")
+    sp.add_argument("--query", "-q", dest="query_opt", help="Search query (alternative, for 'search')")
+    sp.add_argument("--limit", type=int, default=50, help="Max results (for 'list')")
+    sp.add_argument("--output", "-o", help="Output file (for 'export')")
 
     args = parser.parse_args()
 
@@ -1841,9 +2444,36 @@ Examples:
         cmd_delete(args, config)
     elif args.command == "cleanup":
         cmd_cleanup(args, config)
+    elif args.command == "db":
+        cmd_db(args, config)
     else:
         parser.print_help()
 
 
+def _install_signal_handlers():
+    """Install global signal handlers for graceful shutdown.
+
+    Inspired by TAS — prevents silent crashes and ensures temp messages
+    are cleaned up on Ctrl+C / SIGTERM.
+    """
+    import signal
+
+    def sigint_handler(signum, frame):
+        print("\n\n⚠️ Interrupted by user (Ctrl+C).")
+        sys.exit(130)
+
+    def sigterm_handler(signum, frame):
+        print("\n⚠️ Received SIGTERM. Shutting down.")
+        sys.exit(143)
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+        signal.signal(signal.SIGTERM, sigterm_handler)
+    except (ValueError, AttributeError):
+        # On Windows, SIGTERM may not be available
+        pass
+
+
 if __name__ == "__main__":
+    _install_signal_handlers()
     main()

@@ -49,13 +49,20 @@
 
 - ✅ **پشتیبانی از چند ربات** با چرخش round-robin (سرعت چند برابر)
 - ✅ **دانلود موازی پارت‌ها** (همه ربات‌ها همزمان)
+- ✅ **آپلود و دانلود بالک** (چند فایل / چند لینک در یک دستور)
+- ✅ **رمزنگاری AES-256-GCM** (اختیاری، zero-knowledge، با PBKDF2 600k iterations)
+- ✅ **فشرده‌سازی هوشمند gzip** (رد کردن فرمت‌های از قبل فشرده مثل mp4، zip)
+- ✅ **هدر خودتوصیف‌کننده chunk** (TGV1 magic — هر chunk خودش رو معرفی می‌کنه)
+- ✅ **دیتابیس SQLite** برای ذخیره متادیتا (جستجو، آمار، خروجی)
 - ✅ **محدودیت نرخ per-bot** (در برابر FloodWait امن، حداقل 50ms فاصله)
 - ✅ **Connection pooling** (`requests.Session` مجزا برای هر ربات)
 - ✅ **پیام description** قبل از پارت‌ها (نام + حجم + SHA256 + متن + هشتگ)
 - ✅ **پیام manifest** بعد از پارت‌ها (به عنوان نشانگر "پایان" + reply به آخرین پارت)
 - ✅ **Resume** هم برای آپلود هم برای دانلود
 - ✅ **اعتبارسنجی/پاک‌سازی طول نام فایل و caption**
+- ✅ **پاک‌سازی هشتگ** (سازگار با تلگرام: `sci-fi` → `sci_fi`، `2026` → `_2026`)
 - ✅ **پاک‌سازی خودکار با Ctrl+C** (حذف پیام‌های موقت)
+- ✅ **Progress bar بهبودیافته** (speed لحظه‌ای هر 200ms، مثل TAS)
 - ✅ **فایل کانفیگ** (`~/.tg-vault.json`)
 - ✅ **CLI + منوی تعاملی**
 - ✅ **امن در برابر همزمانی** (هر سشن یک UUID منحصر به فرد داره)
@@ -284,39 +291,216 @@ python tg.py test   # بررسی اینکه همه ادمین هستن
   "upload_delay": 0.3,
   "download_delay": 0.2,
   "parallel_workers": 4,
-  "version": 6
+  "db_enabled": true,
+  "db_path": "/home/user/.tg-vault.db",
+  "version": 7
 }
 ```
 
-## اپ وب (GitHub Pages)
+## آپلود و دانلود بالک (Bulk)
 
-tg-vault همچنین یک **اپ وب کاملاً client-side** داره — بدون backend، بدون سرور، بدون نصب. توکن ربات هیچ‌وقت مرورگر شما رو ترک نمی‌کنه.
+tg-vault از **عملیات بالک** به طور ذاتی پشتیبانی می‌کنه — می‌تونید چند فایل یا چند لینک رو در یک دستور بدید.
 
-🌐 **دموی زنده**: https://kesafatkari.github.io/tg-vault/
+### آپلود بالک
 
-ویژگی‌ها:
-- 🔐 تنظیمات در `localStorage` ذخیره می‌شه (فقط مرورگر، هیچ جایی به جز تلگرام ارسال نمی‌شه)
-- 📤 آپلود با drag-and-drop + progress زنده
-- 📥 دانلود با لینک manifest + بررسی SHA256
-- 📋 نمایش اطلاعات manifest بدون دانلود
-- 🌙 تم تاریک، سازگار با موبایل
-- 🚀 روی هر هاست استاتیک کار می‌کنه (GitHub Pages، Netlify، Cloudflare Pages، یا حتی فایل HTML رو локal باز کنید)
+چند فایل رو در یک دستور آپلود کنید. فلگ‌های `--desc` و `--tag` به همه فایل‌ها اعمال می‌شن:
 
-برای اجرای local:
 ```bash
-# فایل رو در مرورگر باز کنید
-open docs/index.html
-# یا local serve کنید
-python3 -m http.server 8000 -d docs
-# بعد به http://localhost:8000 برید
+# آپلود چند فایل
+python tg.py upload file1.zip file2.zip file3.zip --desc "دسته پشتیبان" --tag backup,2026
+
+# استفاده از wildcards شل (توسط شل شما expand می‌شه)
+python tg.py upload *.mp4 --tag movies
+python tg.py upload photos/*.jpg --desc "عکس‌های تعطیلات"
 ```
+
+اسکریپت به ترتیب (یکی بعد از دیگری) آپلود می‌کنه و در انتها خلاصه نشون می‌ده:
+
+```
+============================================================
+📊 Bulk upload summary (3 files):
+============================================================
+  ✅ file1.zip: https://t.me/c/.../42
+  ✅ file2.zip: https://t.me/c/.../46
+  ❌ file3.zip: failed
+3/3 files uploaded successfully.
+```
+
+### دانلود بالک
+
+چند فایل رو با دادن چند لینک manifest دانلود کنید:
+
+```bash
+# چند لینک
+python tg.py download https://t.me/c/.../42 https://t.me/c/.../43 https://t.me/c/.../44
+
+# خوندن لینک‌ها از فایل متنی (یک لینک در هر خط؛ # برای کامنت)
+python tg.py download --links-file my_links.txt --output-dir ~/Downloads
+
+# ترکیب هر دو
+python tg.py download https://t.me/c/.../42 --links-file more_links.txt --output-dir ~/Downloads
+```
+
+نمونه `my_links.txt`:
+```
+# لینک‌های پشتیبان — دانلود 2026-07-11
+https://t.me/c/1234567890/42
+https://t.me/c/1234567890/46
+# این خط کامنته
+https://t.me/c/1234567890/50
+```
+
+فلگ `--output` فقط برای دانلود تک‌فایلی مجازه (در غیر این صورت نام اصلی فایل از manifest استفاده می‌شه).
+
+## دیتابیس (SQLite)
+
+tg-vault می‌تونه به صورت اختیاری متادیتای هر فایل آپلود شده رو در یک دیتابیس محلی SQLite ذخیره کنه. این به شما اجازه می‌ده:
+
+- 🔍 **جستجو** بر اساس نام، توضیحات یا هشتگ
+- 📊 **مشاهده آمار** (تعداد فایل‌ها، حجم کل، تعداد دانلود، فایل‌های پرطرفدار)
+- 📋 **لیست کردن** همه فایل‌ها با لینک‌های share
+- 📤 **خروجی JSON** برای backup یا migration
+- 🔄 **پیگیری دانلودها** (هر فایل کِی آخرین بار دانلود شده)
+
+دیتابیس به صورت **پیش‌فرض** وقتی `tg.py setup` رو اجرا می‌کنید فعال می‌شه. می‌تونید دستی هم فعالش کنید:
+
+```bash
+python tg.py db enable                                  # فعال‌سازی + ساخت DB
+python tg.py db info                                    # اطلاعات DB + آمار
+python tg.py db list --limit 20                         # لیست فایل‌های اخیر
+python tg.py db search "movie"                          # جستجو بر اساس نام/توضیح/هشتگ
+python tg.py db search "backup" --limit 10              # محدود کردن نتایج
+python tg.py db stats                                   # فقط آمار
+python tg.py db export --output backup.json             # خروجی گرفتن همه رکوردها به JSON
+python tg.py db disable                                 # غیرفعال‌سازی (فایل نگه داشته می‌شه)
+```
+
+### چه چیزایی در دیتابیس ذخیره می‌شه؟
+
+برای هر فایل آپلود شده:
+
+| فیلد | توضیح |
+|------|-------|
+| `id` | ID ردیف خودکار |
+| `name` | نام اصلی فایل |
+| `size` | حجم فایل به بایت |
+| `sha256` | هش SHA256 (شناسه منحصر به فرد) |
+| `total_parts` | تعداد پارت‌ها |
+| `chunk_size` | اندازه پارت استفاده شده (معمولاً 19 مگ) |
+| `message_ids` | آرایه JSON از message IDهای تلگرام (پارت‌ها + manifest) |
+| `manifest_msg_id` | Message ID پیام manifest |
+| `description_msg_id` | Message ID پیام توضیحات |
+| `description` | متن توضیحات کاربر |
+| `hashtags` | آرایه JSON از هشتگ‌ها |
+| `main_channel` | آیدی کانالی که فایل توش ذخیره شده |
+| `temp_channel` | آیدی کانال موقت برای forward |
+| `share_link` | لینک `t.me/c/.../N` به manifest |
+| `session_id` | UUID 8 کاراکتری session آپلود |
+| `uploaded_at` | timestamp یونیکس آپلود |
+| `last_accessed_at` | timestamp یونیکس آخرین دانلود |
+| `status` | `uploaded` / `deleted` / `corrupted` |
+
+یک جدول جداگانه `downloads` هر رویداد دانلود رو لاگ می‌کنه (file_id, output_path, sha256_verified, downloaded_at).
+
+### محل دیتابیس
+
+مسیر دیتابیس به این ترتیب تعیین می‌شه:
+1. فیلد `db_path` در فایل config (صریح)
+2. کنار فایل config: `~/.tg-vault.db`
+3. تغییر در هر زمان: `python tg.py db enable` بعد edit config
+
+مسیر در فایل config ذخیره می‌شه تا اسکریپت در هر اجرا بدونه کجاست.
+
+### لاگ خودکار
+
+وقتی دیتابیس فعال باشه:
+- **هر آپلود** به طور خودکار یک رکورد insert می‌کنه (یا اگه SHA256 از قبل وجود داشته باشه، update)
+- **هر دانلود** به طور خودکار در جدول `downloads` لاگ می‌شه و `last_accessed_at` آپدیت می‌شه
+- اگه فایل دیتابیس موجود نباشه، در اولین استفاده به طور خودکار ساخته می‌شه
+
+## رمزنگاری و فشرده‌سازی (v8)
+
+tg-vault v8 **رمزنگاری client-side اختیاری** و **فشرده‌سازی هوشمند** اضافه می‌کنه، با الهام از [TAS](https://github.com/ixchio/tas).
+
+### رمزنگاری (AES-256-GCM)
+
+فایل‌ها رو end-to-end با یک رمز عبور رمزنگاری کنید. حتی اگه کسی به کانال تلگرام شما دسترسی پیدا کنه، بدون رمز عبور نمی‌تونه فایل‌ها رو بخونه.
+
+```bash
+# آپلود با رمزنگاری (رمز عبور رو می‌پرسه)
+python tg.py upload secret.txt --encrypt
+
+# یا با فلگ
+python tg.py upload secret.txt --encrypt --password "my-password"
+
+# یا با env var (پیشنهادی برای اسکریپت‌ها)
+export TG_VAULT_PASSWORD="my-password"
+python tg.py upload secret.txt --encrypt
+
+# دانلود (رمز عبور رو می‌پرسه)
+python tg.py download https://t.me/c/.../42
+
+# یا با فلگ
+python tg.py download https://t.me/c/.../42 --password "my-password"
+```
+
+**جزئیات فنی:**
+- **الگوریتم:** AES-256-GCM (رمزنگاری تأیید‌شده — tampering رو تشخیص می‌ده)
+- **مشتق‌سازی کلید:** PBKDF2-HMAC-SHA512 با 600,000 تکرار (پیشنهاد OWASP 2025)
+- **Salt:** 32 بایت رندوم، در manifest ذخیره می‌شه
+- **IV:** 12 بایت، دترمینیستیک per chunk (از chunk index مشتق می‌شه) — از ذخیره IV per chunk جلوگیری می‌کنه
+- **تأیید رمز عبور:** hash جداگانه در manifest ذخیره می‌شه، تا رمز اشتباه سریع fail بشه (قبل از هر دانلودی)
+- **کلید هرگز ذخیره نمی‌شه** — فقط کاربر اون رو می‌دونه
+
+### فشرده‌سازی (smart gzip)
+
+فشرده‌سازی به طور **پیش‌فرض روشنه**. tg-vault به طور خودکار برای فرمت‌های از قبل فشرده (jpg، mp4، zip و غیره) فشرده‌سازی رو رد می‌کنه تا CPU ذخیره بشه.
+
+```bash
+# پیش‌فرض: فشرده‌سازی روشن
+python tg.py upload file.txt
+
+# غیرفعال‌سازی فشرده‌سازی
+python tg.py upload file.txt --no-compress
+```
+
+**پسوندهای رد شده:** `.jpg`, `.png`, `.mp4`, `.mkv`, `.zip`, `.7z`, `.gz`, `.pdf`, `.docx`, `.epub` و [بیشتر](tg_compression.py).
+
+برای بقیه فایل‌ها، gzip level 6 استفاده می‌شه. اگه فشرده‌سازی واقعاً حجم رو کم نکنه، اصلی نگه داشته می‌شه.
+
+### هدر خودتوصیف‌کننده chunk (TGV1)
+
+هر chunk با یک هدر 40 بایتی شروع می‌شه که شامل:
+- Magic bytes (`TGV1`)
+- Version
+- Flags (فشرده؟ رمزنگاری؟)
+- chunk index + total chunks
+- حجم اصلی فایل
+- 16 بایت اول SHA256 فایل
+
+این به شما اجازه می‌ده یک chunk رو بدون مراجعه به دیتابیس شناسایی کنید — مفید برای recovery.
+
+## نوع چت: کانال، گروه، یا گروه تاپیک‌دار؟
+
+برای کاربرد tg-vault (ذخیره فایل به عنوان پیام ربات)، مقایسه سه نوع:
+
+| نوع | مزایا | معایب | پیشنهاد؟ |
+|------|-------|-------|----------|
+| **کانال خصوصی** | ✅ stream یک‌طرفه تمیز؛ ماندگار؛ همه همه پیام‌ها رو می‌بینن؛ بدون نویز اعضا | فقط یک stream پیام (بدون دسته‌بندی) | ✅ **بله — پیش‌فرض** |
+| **گروه عادی** | چت دوطرفه | اعضا می‌تونن پیام دیگه‌ای رو پاک کنن؛ شلوغ می‌شه | ❌ نه |
+| **گروه تاپیک‌دار** | ✅ می‌تونی برای هر فایل/دسته یک topic بسازی، سازماندهی بهتر | نیاز به `message_thread_id` در همه API callها (الان توسط tg-vault پشتیبانی نمی‌شه) | ⚠️ هنوز پشتیبانی نمی‌شه |
+
+**نتیجه:** از **کانال خصوصی** برای ذخیره استفاده کنید. اگه می‌خواید دسته‌بندی داشته باشید، از **کانال‌های جداگانه برای هر دسته** استفاده کنید (مثلاً `movies`، `photos`، `documents`) و بینشون با `python tg.py channels set main <id>` سوییچ کنید.
 
 ## مثال‌ها
 
 در پوشه [`examples/`](examples/) ببینید:
-- [`parallel_uploads.py`](examples/parallel_uploads.py) — آپلود همزمان چند فایل
+- [`parallel_uploads.py`](examples/parallel_uploads.py) — آپلود همزمان چند فایل (subprocess-per-file)
+- [`bulk_upload.py`](examples/bulk_upload.py) — آپلود بالک با سینتکس جدید `upload file1 file2 ...`
+- [`bulk_download.py`](examples/bulk_download.py) — دانلود بالک با سینتکس جدید `download link1 link2 ...`
 - [`backup_directory.py`](examples/backup_directory.py) — پشتیبان‌گیری بازگشتی از یک دایرکتوری
 - [`download_all.py`](examples/download_all.py) — دانلود همه فایل‌های manifest از یک کانال
+- [`db_search.py`](examples/db_search.py) — جستجو در دیتابیس SQLite از یک اسکریپت
 
 ## مقایسه با پروژه‌های مشابه
 

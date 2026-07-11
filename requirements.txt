@@ -1,2 +1,6 @@
 # tg-vault dependencies
 requests>=2.25.0
+
+# Optional: required for --encrypt feature (AES-256-GCM)
+# Install with: pip install cryptography
+cryptography>=41.0.0
