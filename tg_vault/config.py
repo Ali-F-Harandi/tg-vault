@@ -23,6 +23,9 @@ from .constants import (
     DEFAULT_DOWNLOAD_DELAY,
     DEFAULT_PARALLEL_WORKERS,
     TG_FILE_SIZE_LIMIT,
+    TG_UPLOAD_SIZE_LIMIT,  # Bot API upload limit (50 MB)
+    PYROGRAM_UPLOAD_LIMIT,  # Pyrogram upload limit (2000 MB)
+    DEFAULT_PYROGRAM_CHUNK_MB,  # Default chunk size for Pyrogram mode
     VERSION,
 )
 
@@ -44,7 +47,26 @@ class Config:
         # Ensure main_channel is always in the list
         if self.main_channel and self.main_channel not in self.storage_channels:
             self.storage_channels.insert(0, self.main_channel)
-        self.chunk_size = int(data.get("chunk_size_mb", DEFAULT_CHUNK_MB)) * 1024 * 1024
+        # Pyrogram (MTProto) settings — optional
+        # If api_id and api_hash are set, Pyrogram is used for large files,
+        # bypassing Bot API's 20 MB download / 50 MB upload limits.
+        self.api_id = data.get("api_id")  # int or None
+        self.api_hash = data.get("api_hash")  # str or None
+
+        # Determine effective chunk size based on mode
+        if self.api_id and self.api_hash:
+            # Pyrogram mode — allow larger chunks (default 500 MB, max 2000 MB)
+            chunk_mb = int(data.get("chunk_size_mb", DEFAULT_PYROGRAM_CHUNK_MB))
+            max_mb = PYROGRAM_UPLOAD_LIMIT // (1024 * 1024)  # 2000 MB
+        else:
+            # Bot API mode — 19 MB default, max 20 MB
+            chunk_mb = int(data.get("chunk_size_mb", DEFAULT_CHUNK_MB))
+            max_mb = TG_FILE_SIZE_LIMIT // (1024 * 1024)  # 20 MB
+
+        if chunk_mb > max_mb:
+            chunk_mb = max_mb
+        self.chunk_size = chunk_mb * 1024 * 1024
+
         self.upload_delay = float(data.get("upload_delay", DEFAULT_UPLOAD_DELAY))
         self.download_delay = float(data.get("download_delay", DEFAULT_DOWNLOAD_DELAY))
         self.parallel_workers = int(data.get("parallel_workers", DEFAULT_PARALLEL_WORKERS))
@@ -76,6 +98,8 @@ class Config:
                 "temp": self.temp_channel if self.temp_channel != self.main_channel else None,
                 "storage": storage_list if storage_list else None,
             },
+            "api_id": self.api_id,
+            "api_hash": self.api_hash,
             "chunk_size_mb": self.chunk_size // (1024 * 1024),
             "upload_delay": self.upload_delay,
             "download_delay": self.download_delay,
@@ -98,11 +122,43 @@ class Config:
             errors.append("No bots configured. Run: tg.py bots add <TOKEN>")
         if not self.main_channel:
             errors.append("Main channel not set. Run: tg.py channels set main <ID>")
-        if self.chunk_size > TG_FILE_SIZE_LIMIT:
+        # Validate chunk size based on mode
+        if self.api_id and self.api_hash:
+            max_limit = PYROGRAM_UPLOAD_LIMIT
+            mode = "Pyrogram"
+        else:
+            max_limit = TG_FILE_SIZE_LIMIT
+            mode = "Bot API"
+        if self.chunk_size > max_limit:
             errors.append(
-                f"chunk_size_mb too large (max {TG_FILE_SIZE_LIMIT // (1024*1024)} MB)"
+                f"chunk_size_mb too large for {mode} mode "
+                f"(max {max_limit // (1024*1024)} MB)"
             )
+        # Warn if api_id set but api_hash missing (or vice versa)
+        if bool(self.api_id) != bool(self.api_hash):
+            errors.append("Both api_id and api_hash must be set together (or both omitted)")
         return errors
+
+    # ─────────────── Pyrogram helpers ───────────────
+
+    @property
+    def pyrogram_enabled(self):
+        """True if Pyrogram (MTProto) is configured and available."""
+        return bool(self.api_id and self.api_hash)
+
+    @property
+    def max_upload_size(self):
+        """Maximum single-file upload size for the current mode."""
+        if self.pyrogram_enabled:
+            return PYROGRAM_UPLOAD_LIMIT  # 2 GB
+        return TG_UPLOAD_SIZE_LIMIT  # 50 MB
+
+    @property
+    def max_download_size(self):
+        """Maximum single-file download size for the current mode."""
+        if self.pyrogram_enabled:
+            return PYROGRAM_UPLOAD_LIMIT  # 2 GB (same limit for bots)
+        return TG_FILE_SIZE_LIMIT  # 20 MB
 
     # ─────────────── Multi-channel helpers ───────────────
 

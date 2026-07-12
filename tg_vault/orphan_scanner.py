@@ -242,7 +242,7 @@ def scan_orphans(config, bot_pool=None, max_scan=500, batch_size=500,
     Returns a dict with stats.
     """
     if bot_pool is None:
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         if verbose:
             print("❌ No active bots.")
@@ -435,7 +435,7 @@ def delete_orphan_from_telegram(config, orphan_id, bot_pool=None,
         return True
 
     if bot_pool is None:
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         if verbose:
             print("❌ No active bots.")

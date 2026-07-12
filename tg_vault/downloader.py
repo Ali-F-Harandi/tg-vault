@@ -240,14 +240,28 @@ class Downloader:
                 self._temp_msg_ids.extend(failed)
 
     def _download_part(self, source_chat_id, msg_id, part_num):
-        """Download a single part (worker function for parallel download)."""
+        """Download a single part (worker function for parallel download).
+
+        If the bot has Pyrogram (MTProto) enabled, downloads directly from
+        the source channel — no need for forwardMessage to temp channel.
+        Otherwise, falls back to the Bot API approach (forward + getFile).
+        """
         try:
+            # Check if bot supports Pyrogram download (bypasses 20MB limit)
+            bot = self.bot_pool.get_next()
+            if hasattr(bot, '_pyro_started') and bot._pyro_started:
+                # Pyrogram mode: download directly from source channel
+                content = bot.download_media(source_chat_id, msg_id)
+                if content is not None:
+                    return part_num, content
+                # If Pyrogram download failed, fall through to Bot API
+                print(f"\n  Pyrogram download failed for part {part_num}, trying Bot API...")
+
+            # Bot API mode: forward to temp, getFile, HTTP GET
             copied = self._fetch_message(source_chat_id, msg_id)
             if not copied:
                 return part_num, None
             content = self._download_document(copied)
-            # Cleanup this specific forward
-            # (already appended to _temp_msg_ids; cleaned up periodically)
             return part_num, content
         except Exception as e:
             print(f"\n  Error in part {part_num}: {e}")

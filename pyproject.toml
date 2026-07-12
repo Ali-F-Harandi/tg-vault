@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tg-vault"
-version = "8.0.0"
+version = "8.4.0"
 description = "Telegram Bot API cloud storage — use Telegram as a personal cloud backend"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -17,6 +17,14 @@ dependencies = [
     "cryptography>=41.0.0",
     "windows-curses>=2.3; sys_platform == 'win32'",
 ]
+
+[project.optional-dependencies]
+# Pyrogram hybrid mode — bypass 50 MB upload / 20 MB download limits (up to 2 GB)
+pyrogram = [
+    "pyrogram>=2.0.0",
+    "tgcrypto>=1.2.0",
+]
+
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",

@@ -84,7 +84,8 @@ tg_vault/
 ├── commands.py          # cmd_* functions
 ├── interactive.py       # Interactive menu
 ├── config.py            # Config class
-├── bot_pool.py          # Bot + BotPool
+├── bot_pool.py          # Bot + BotPool (Bot API)
+├── pyrogram_bot.py      # HybridBot (Pyrogram + Bot API, optional)
 ├── uploader.py          # Uploader class
 ├── downloader.py        # Downloader class
 ├── crypto.py            # AES-256-GCM encryptor
@@ -151,6 +152,33 @@ In v8, the IV for each chunk is derived deterministically from its chunk index: 
 
 This is safe per NIST SP 800-38D as long as the key is never reused with the same IV.
 
+### 9. Why a hybrid Bot API + Pyrogram approach?
+
+Starting with v8.4.0, tg-vault supports an optional **Pyrogram hybrid mode**. The `HybridBot` class (`tg_vault/pyrogram_bot.py`) uses:
+- **Bot API** (`requests`) for all small operations (sendMessage, deleteMessage, forwardMessage, getMe) — faster, simpler, no event loop overhead
+- **Pyrogram** (MTProto) for large file operations — bypasses the 50 MB upload / 20 MB download Bot API limits, supporting up to 2 GB chunks
+
+**Why not use Pyrogram for everything?**
+- Bot API is simpler for small payloads (no asyncio event loop needed)
+- Bot API is faster for tiny operations (no MTProto handshake overhead)
+- Pyrogram adds a dependency and an event loop thread per bot
+
+**Why not use Bot API for everything?**
+- 50 MB upload limit → files need many small chunks
+- 20 MB download limit → requires `forwardMessage` to temp channel (a bot can't `getFile` directly from a channel it doesn't own)
+- More chunks = more API calls = slower + more FloodWait risk
+
+**How HybridBot works:**
+1. On `init_info()`, it starts a Pyrogram client in a dedicated thread with a persistent event loop
+2. `request("sendDocument", ...)` checks file size — if >45 MB, routes to Pyrogram; otherwise uses Bot API
+3. `download_media(chat_id, msg_id)` uses Pyrogram directly — no `forwardMessage` needed
+4. All other requests (sendMessage, deleteMessage, etc.) go through Bot API
+5. If Pyrogram fails to start (not installed, bad credentials), it falls back to Bot API only with a warning
+
+**Thread safety:** Each `HybridBot` has its own event loop thread. The `_pyro_lock` serializes Pyrogram calls to prevent concurrent access to the same Pyrogram client (Pyrogram is not thread-safe for concurrent calls on the same client).
+
+**Event loop management:** Pyrogram's sync wrappers use `asyncio.get_event_loop()` which conflicts with our dedicated loop. We bypass this by calling `method.__wrapped__(self._pyro, ...)` to access the raw coroutine, then run it via `asyncio.run_coroutine_threadsafe(coro, self._loop)`.
+
 ## Pipeline
 
 ### Upload pipeline (per chunk)
@@ -204,6 +232,7 @@ After all chunks are written, the file's SHA256 is verified against the manifest
 
 - `BotPool._counter` protected by `threading.Lock`
 - `Bot._last_request_time` protected by `threading.Lock` (per-bot rate limiting)
+- `HybridBot._pyro_lock` protects Pyrogram calls (each bot has its own event loop thread)
 - `Downloader._temp_msg_ids` protected by `threading.Lock`
 - `ProgressTracker.current` protected by `threading.Lock`
 - `Downloader` write loop protected by `write_lock` (per-file)

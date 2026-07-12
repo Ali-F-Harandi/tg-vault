@@ -77,7 +77,7 @@ def interactive_menu(config_path):
                 for e in errors:
                     print(f"❌ {e}")
                 continue
-            bot_pool = BotPool(config.bots)
+            bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
             db = config.get_db()
             args_mock = argparse.Namespace(
                 files=paths, desc=desc, tag=tags, resume=False
@@ -93,7 +93,7 @@ def interactive_menu(config_path):
                 for e in errors:
                     print(f"❌ {e}")
                 continue
-            bot_pool = BotPool(config.bots)
+            bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
             db = config.get_db()
             uploader = Uploader(config, bot_pool, db=db)
             uploader.upload(path, resume=True)
@@ -112,7 +112,7 @@ def interactive_menu(config_path):
                 for e in errors:
                     print(f"❌ {e}")
                 continue
-            bot_pool = BotPool(config.bots)
+            bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
             db = config.get_db()
             downloader = Downloader(config, bot_pool, db=db)
             for i, link in enumerate(links, 1):
@@ -134,7 +134,7 @@ def interactive_menu(config_path):
                 for e in errors:
                     print(f"❌ {e}")
                 continue
-            bot_pool = BotPool(config.bots)
+            bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
             downloader = Downloader(config, bot_pool)
             try:
                 downloader.info(link)

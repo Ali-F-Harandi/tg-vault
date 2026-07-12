@@ -219,9 +219,14 @@ class Uploader:
                         )
                         processed = header + processed
 
-                    part_name = sanitize_filename(
-                        f"{file_name}.part{part_num:04d}of{total_parts:04d}"
-                    )
+                    # For single-part files, use the original filename (no .part suffix)
+                    # For multi-part files, use .partNNNNofNNNN suffix
+                    if total_parts == 1:
+                        part_name = sanitize_filename(file_name)
+                    else:
+                        part_name = sanitize_filename(
+                            f"{file_name}.part{part_num:04d}of{total_parts:04d}"
+                        )
 
                     bot = self.bot_pool.get_next()
                     files = {"document": (part_name, processed)}

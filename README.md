@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Version: v8.3.0](https://img.shields.io/badge/version-v8.3.0-green.svg)](CHANGELOG.md)
+[![Version: v8.4.0](https://img.shields.io/badge/version-v8.4.0-green.svg)](CHANGELOG.md)
 
 > 📖 [فارسی](README.fa.md) | English
 
@@ -16,7 +16,19 @@ tg-vault turns Telegram into an **unlimited personal cloud drive** using **only 
 
 Telegram's Bot API has an asymmetric size limit: `sendDocument` accepts 50 MB uploads but `getFile` can only download 20 MB. tg-vault splits files into ~19 MB chunks, uploads each as a reply-linked message, and stores a **manifest** message containing the file's metadata (name, size, SHA256, and the list of every chunk's `message_id`). To download, you only need the link to the manifest.
 
-## Features (v8.3.0)
+### 🆕 v8.4.0 — Pyrogram Hybrid Mode (Optional)
+
+tg-vault now supports an optional **Pyrogram hybrid mode** that bypasses Bot API file size limits entirely. When you configure `api_id` and `api_hash` (from [my.telegram.org](https://my.telegram.org)), tg-vault uses MTProto (via [Pyrogram](https://github.com/pyrogram/pyrogram)) for large file operations:
+
+| Operation | Bot API (default) | Pyrogram hybrid mode |
+|-----------|-------------------|----------------------|
+| Upload    | 50 MB per chunk   | **2 GB per chunk**   |
+| Download  | 20 MB per chunk   | **2 GB per chunk**   |
+| Forwarding needed? | Yes (temp channel) | **No** (direct download) |
+
+This means fewer chunks, faster transfers, and no need for a temp channel when Pyrogram is enabled. The mode is fully **backward compatible** — if `api_id`/`api_hash` are not set, tg-vault works exactly as before with Bot API only.
+
+## Features (v8.4.0)
 
 ### Core
 - 🚀 **Multi-bot with round-robin** — N bots = N× throughput
@@ -29,6 +41,7 @@ Telegram's Bot API has an asymmetric size limit: `sendDocument` accepts 50 MB up
 - ⏯️ **Resume** for both upload and download
 - 🌐 **Bulk upload/download** — multiple files/links at once
 - 📝 **Compact manifest JSON** (`separators=(',',':')`)
+- 🔄 **Pyrogram hybrid mode** (optional) — bypass 50 MB upload / 20 MB download limits, supports up to **2 GB** chunks via MTProto
 
 ### Download Manager (GUI)
 - 🎯 **IDM-style download management** in the tkinter GUI
@@ -188,6 +201,7 @@ tg-vault/
 │   ├── interactive.py       # Interactive menu
 │   ├── config.py            # Config class (~/.tg-vault.json)
 │   ├── bot_pool.py          # Bot + BotPool (round-robin, thread-safe)
+│   ├── pyrogram_bot.py      # HybridBot (Pyrogram + Bot API, optional)
 │   ├── uploader.py          # Uploader class
 │   ├── downloader.py        # Downloader class (parallel chunks)
 │   ├── download_manager.py  # Download Manager (pause/resume/cancel)
@@ -253,6 +267,26 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for design decisions, thread 
 - `cryptography` (for `--encrypt`)
 - `tkinter` (for GUI; built into Python on Windows/macOS, may need `python3-tk` on Linux)
 
+### Optional — Pyrogram Hybrid Mode (2 GB chunks)
+
+To enable the Pyrogram hybrid mode (bypass 50 MB upload / 20 MB download limits):
+
+```bash
+pip install pyrogram tgcrypto
+```
+
+Then add your `api_id` and `api_hash` (from [my.telegram.org](https://my.telegram.org)) to the config file:
+
+```json
+{
+  "api_id": 123456,
+  "api_hash": "your_api_hash_here",
+  "chunk_size_mb": 500
+}
+```
+
+Without these settings, tg-vault works in Bot API mode (19 MB chunks, 50 MB upload / 20 MB download limits). See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for details.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -260,3 +294,5 @@ MIT — see [LICENSE](LICENSE).
 ## Acknowledgements
 
 Inspired by [TAS (Telegram as Storage)](https://github.com/ixchio/tas) — adopted its best ideas (TGV1 header, encryption pipeline, progress bar) while keeping the 19 MB chunk size that actually works for downloads.
+
+The Pyrogram hybrid mode is inspired by [telegram-downloader](https://github.com/dheison0/telegram-downloader) which demonstrated how Pyrogram's MTProto can bypass Bot API file size limits.

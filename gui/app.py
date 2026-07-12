@@ -1976,7 +1976,7 @@ class TgVaultApp:
         ttk.Label(adv_frame, text="Chunk size (MB):").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.cfg_chunk_mb = tk.IntVar()
         ttk.Entry(adv_frame, textvariable=self.cfg_chunk_mb, width=10).grid(row=0, column=1, sticky=tk.W, pady=2, padx=(8, 16))
-        ttk.Label(adv_frame, text="(must be ≤ 19 for cloud Bot API)", style='Status.TLabel').grid(row=0, column=2, sticky=tk.W)
+        ttk.Label(adv_frame, text="(≤19 Bot API, ≤2000 Pyrogram mode)", style='Status.TLabel').grid(row=0, column=2, sticky=tk.W)
 
         ttk.Label(adv_frame, text="Upload delay (s):").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.cfg_upload_delay = tk.DoubleVar()
@@ -1998,6 +1998,30 @@ class TgVaultApp:
             row=4, column=1, sticky=tk.W, pady=2, padx=(8, 16))
         ttk.Label(adv_frame, text="text=editable, file=not editable, auto=text if fits",
                   style='Status.TLabel').grid(row=4, column=2, sticky=tk.W)
+
+        # ─── Pyrogram (MTProto) Settings ───
+        pyro_frame = ttk.LabelFrame(scroll_frame, text="🔄 Pyrogram Hybrid Mode (Optional — 2 GB chunks)",
+                                     padding=12)
+        pyro_frame.pack(fill=tk.X, padx=16, pady=4)
+
+        ttk.Label(pyro_frame, text="API ID:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.cfg_api_id = tk.StringVar()
+        ttk.Entry(pyro_frame, textvariable=self.cfg_api_id, width=20).grid(row=0, column=1, sticky=tk.W, pady=2, padx=(8, 16))
+        ttk.Label(pyro_frame, text="(from my.telegram.org — enables 2 GB chunks)",
+                  style='Status.TLabel').grid(row=0, column=2, sticky=tk.W)
+
+        ttk.Label(pyro_frame, text="API Hash:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.cfg_api_hash = tk.StringVar()
+        ttk.Entry(pyro_frame, textvariable=self.cfg_api_hash, width=40, show="•").grid(row=1, column=1, sticky=tk.W, pady=2, padx=(8, 16))
+        ttk.Label(pyro_frame, text="(leave empty for Bot API mode, 19 MB chunks)",
+                  style='Status.TLabel').grid(row=1, column=2, sticky=tk.W)
+
+        ttk.Label(pyro_frame,
+                  text="💡 When both API ID and API Hash are set, tg-vault uses Pyrogram (MTProto) "
+                       "for large files — bypassing the 50 MB upload / 20 MB download Bot API limits. "
+                       "Requires: pip install pyrogram tgcrypto",
+                  style='Status.TLabel', wraplength=500, justify=tk.LEFT).grid(
+            row=2, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
 
         # ─── Database Settings ───
         db_frame = ttk.LabelFrame(scroll_frame, text="🗄️ Database", padding=12)
@@ -2102,6 +2126,9 @@ class TgVaultApp:
         self.cfg_db_enabled.set(self.config.db_enabled)
         self.cfg_db_auto_sync.set(self.config.db_auto_sync)
         self.cfg_db_path.set(self.config.db_path or "")
+        # Pyrogram fields
+        self.cfg_api_id.set(str(self.config.api_id or ""))
+        self.cfg_api_hash.set(self.config.api_hash or "")
         self._show_config()
         self.refresh_bot_list()
         self.refresh_storage_channels()
@@ -2109,15 +2136,33 @@ class TgVaultApp:
 
     def save_configuration(self):
         """Save all form fields back to the config file."""
-        # Validate inputs
+        # Validate chunk size based on mode
+        api_id_str = self.cfg_api_id.get().strip()
+        api_hash_str = self.cfg_api_hash.get().strip()
+        pyrogram_mode = bool(api_id_str and api_hash_str)
+
         try:
             chunk_mb = int(self.cfg_chunk_mb.get())
-            if chunk_mb < 1 or chunk_mb > 19:
-                messagebox.showerror("Invalid value", "Chunk size must be between 1 and 19 MB.")
-                return
+            if pyrogram_mode:
+                if chunk_mb < 1 or chunk_mb > 2000:
+                    messagebox.showerror("Invalid value", "Chunk size must be between 1 and 2000 MB in Pyrogram mode.")
+                    return
+            else:
+                if chunk_mb < 1 or chunk_mb > 19:
+                    messagebox.showerror("Invalid value", "Chunk size must be between 1 and 19 MB in Bot API mode.")
+                    return
         except (ValueError, tk.TclError):
             messagebox.showerror("Invalid value", "Chunk size must be a number.")
             return
+
+        # Validate API ID if provided
+        api_id_val = None
+        if api_id_str:
+            try:
+                api_id_val = int(api_id_str)
+            except ValueError:
+                messagebox.showerror("Invalid value", "API ID must be a number.")
+                return
 
         try:
             upload_delay = float(self.cfg_upload_delay.get())
@@ -2149,6 +2194,8 @@ class TgVaultApp:
         self.config.main_channel = _maybe_int(main_ch)
         self.config.temp_channel = _maybe_int(temp_ch)
         self.config.db_sync_channel = _maybe_int(db_sync_ch)
+        self.config.api_id = api_id_val
+        self.config.api_hash = api_hash_str if api_hash_str else None
         self.config.chunk_size = chunk_mb * 1024 * 1024
         self.config.upload_delay = upload_delay
         self.config.download_delay = download_delay

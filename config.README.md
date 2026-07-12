@@ -45,7 +45,9 @@ The setup wizard will create `~/.tg-vault.json` automatically.
 | `bots` | array | List of bot objects with `token` and `username` |
 | `channels.main` | string/int | Channel ID for file storage (e.g. `-1001234567890` or `@username`) |
 | `channels.temp` | string/int | Channel ID for temp forwards + DB backup sync |
-| `chunk_size_mb` | int | Chunk size in MB (default: 19, must be ≤ 20) |
+| `api_id` | int\|null | Telegram API ID from my.telegram.org (enables Pyrogram mode) |
+| `api_hash` | string\|null | Telegram API hash from my.telegram.org (enables Pyrogram mode) |
+| `chunk_size_mb` | int | Chunk size in MB (default: 19 in Bot API mode, 500 in Pyrogram mode) |
 | `upload_delay` | float | Delay between uploads in seconds (default: 0.3) |
 | `download_delay` | float | Delay between downloads in seconds (default: 0.2) |
 | `parallel_workers` | int | Parallel download workers (default: 4) |
@@ -56,6 +58,16 @@ The setup wizard will create `~/.tg-vault.json` automatically.
 | `db_sync_multipart` | bool | Whether last DB sync was multi-part (managed automatically) |
 | `db_auto_sync` | bool | Auto-sync DB after every upload/download (default: true) |
 | `version` | int | Config format version (don't change manually) |
+
+### Pyrogram Hybrid Mode
+
+When `api_id` and `api_hash` are both set:
+- Upload limit increases from 50 MB → **2 GB** per chunk
+- Download limit increases from 20 MB → **2 GB** per chunk
+- No temp channel forwarding needed for downloads
+- Requires: `pip install pyrogram tgcrypto`
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for details.
 
 ## Security
 

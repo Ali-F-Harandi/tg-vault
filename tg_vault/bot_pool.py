@@ -106,19 +106,44 @@ class Bot:
 
 
 class BotPool:
-    """Thread-safe round-robin pool of bots."""
+    """Thread-safe round-robin pool of bots.
 
-    def __init__(self, bots_config):
+    If ``api_id`` and ``api_hash`` are provided in the config, each bot is
+    created as a :class:`HybridBot` (Pyrogram + Bot API). Otherwise, the
+    standard :class:`Bot` (Bot API only) is used.
+    """
+
+    def __init__(self, bots_config, api_id=None, api_hash=None):
         self.bots = []
         self._counter = 0
         self._lock = threading.Lock()
+        self._api_id = api_id
+        self._api_hash = api_hash
 
         for b in bots_config:
-            bot = Bot(b["token"], b.get("username", ""))
+            token = b["token"]
+            username = b.get("username", "")
+
+            if api_id and api_hash:
+                # Hybrid mode: Pyrogram + Bot API
+                from .pyrogram_bot import HybridBot, PYROGRAM_AVAILABLE
+                if PYROGRAM_AVAILABLE:
+                    bot = HybridBot(token, api_id, api_hash, username)
+                    mode = "Pyrogram+BotAPI"
+                else:
+                    # Pyrogram not installed — fall back to Bot
+                    bot = Bot(token, username)
+                    mode = "BotAPI (Pyrogram not installed)"
+            else:
+                # Bot API only
+                bot = Bot(token, username)
+                mode = "BotAPI"
+
             if bot.init_info():
                 self.bots.append(bot)
+                print(f"  ✅ @{bot.username} (id: {bot.id}) — {mode}")
             else:
-                print(f"Warning: bot {b['token'][:15]}... could not be initialized.")
+                print(f"Warning: bot {token[:15]}... could not be initialized.")
 
     def get_next(self):
         """Get the next bot in round-robin order (thread-safe)."""

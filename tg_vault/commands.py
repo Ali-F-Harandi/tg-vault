@@ -358,7 +358,7 @@ def cmd_upload(args, config):
             print(f"❌ {e}")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -468,7 +468,7 @@ def cmd_download(args, config):
             print(f"❌ {e}")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -531,7 +531,7 @@ def cmd_info(args, config):
             print(f"❌ {e}")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     downloader = Downloader(config, bot_pool)
     try:
         downloader.info(args.link)
@@ -547,7 +547,7 @@ def cmd_test(args, config):
         print("❌ No bots configured.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     print(f"📊 Bots: {len(bot_pool)}")
     for b in bot_pool.list_bots():
         status = "✅" if b.id else "❌"
@@ -600,7 +600,7 @@ def cmd_ls(args, config):
         print("❌ Main channel not set.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -669,7 +669,7 @@ def cmd_ls(args, config):
 
 def cmd_delete(args, config):
     """Delete a file's messages (description, parts, manifest) from channel."""
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -733,7 +733,7 @@ def cmd_cleanup(args, config):
         print("❌ Temp channel not set.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -931,7 +931,7 @@ def cmd_db(args, config):
     elif args.db_action == "find":
         # Scan channel for latest DB backup and update config
         print("🔍 Scanning channel for DB backup messages...")
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
         found_id = find_latest_db_backup(config, bot_pool, verbose=True)
         if found_id:
             print(f"\n✅ Found! DB backup is at message {found_id}")
@@ -954,7 +954,7 @@ def cmd_db(args, config):
                 delay = float(delay)
             except ValueError:
                 delay = 0.5
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
 
         # Scan all storage channels
         all_channels = config.get_all_storage_channels()
@@ -1033,7 +1033,7 @@ def cmd_db(args, config):
                     if confirm.strip().lower() != "yes":
                         print("Cancelled.")
                         return
-                bot_pool = BotPool(config.bots)
+                bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
                 total = len(orphans)
                 ok = 0
                 for i, o in enumerate(orphans, 1):
@@ -1050,7 +1050,7 @@ def cmd_db(args, config):
                 except ValueError:
                     print(f"❌ Invalid IDs: {args.ids}")
                     return
-                bot_pool = BotPool(config.bots)
+                bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
                 ok = 0
                 for oid in ids:
                     if delete_orphan_from_telegram(
@@ -1133,7 +1133,7 @@ def cmd_db(args, config):
                 print("Cancelled.")
                 return
 
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
         deleted = 0
         for mid in msg_ids:
             bot = bot_pool.get_next()
@@ -1200,7 +1200,7 @@ def _build_filters_from_args(args):
 
 def _db_download(args, config, db):
     """Download files from database by ID, IDs, or all-matching filter."""
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -1410,7 +1410,7 @@ def _db_edit(args, config, db):
         print(f"   Remove tags: {remove_tags}")
     print()
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -1675,7 +1675,7 @@ def _db_verify(config, db, force=False):
         print("❌ No bots configured — cannot fetch manifests to fix.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots — cannot fetch manifests to fix.")
         return
@@ -1776,7 +1776,7 @@ def _db_find_missing(config, db):
         print("No uploaded files to check.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return
@@ -1872,7 +1872,7 @@ def _db_clear_temp_keep_db(config, db):
         print("❌ Temp channel not set.")
         return
 
-    bot_pool = BotPool(config.bots)
+    bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         print("❌ No active bots.")
         return

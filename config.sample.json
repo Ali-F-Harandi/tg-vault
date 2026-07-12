@@ -10,6 +10,8 @@
     "temp": -1009876543210,
     "storage": null
   },
+  "api_id": null,
+  "api_hash": null,
   "chunk_size_mb": 19,
   "upload_delay": 0.3,
   "download_delay": 0.2,

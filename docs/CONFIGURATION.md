@@ -55,6 +55,8 @@ $EDITOR ~/.tg-vault.json
     "main": -1001234567890,
     "temp": -1009876543210
   },
+  "api_id": null,
+  "api_hash": null,
   "chunk_size_mb": 19,
   "upload_delay": 0.3,
   "download_delay": 0.2,
@@ -107,11 +109,41 @@ If `temp` is not set or equals `main`, the main channel is used for temp forward
 
 > **Why a temp channel?** A bot cannot send messages to itself in Telegram, so we can't forward to `bot.id` to extract `file_id`s. Instead, we forward to the temp channel, download the file, then delete the forward.
 
-### `chunk_size_mb` (default: 19)
+### `api_id` / `api_hash` (optional, default: `null`)
 
-Size of each chunk in megabytes. Must be ≤ 19 to stay under Telegram's 20 MB `getFile` download limit.
+Telegram API credentials from [my.telegram.org](https://my.telegram.org). When **both** are set, tg-vault enables **Pyrogram hybrid mode**:
+
+| Mode | `api_id`/`api_hash` | Upload limit | Download limit | Forwarding needed? |
+|------|---------------------|--------------|----------------|-------------------|
+| Bot API (default) | Not set | 50 MB/chunk | 20 MB/chunk | Yes (temp channel) |
+| Pyrogram hybrid | Set | **2 GB/chunk** | **2 GB/chunk** | **No** (direct download) |
+
+To get your `api_id` and `api_hash`:
+1. Go to [my.telegram.org](https://my.telegram.org)
+2. Log in with your phone number
+3. Click "API development tools"
+4. Create a new application (any name/description)
+5. Copy the `api_id` (number) and `api_hash` (string)
+
+**Requirements for Pyrogram mode:**
+```bash
+pip install pyrogram tgcrypto
+```
+
+If Pyrogram is not installed but `api_id`/`api_hash` are set, tg-vault falls back to Bot API mode with a warning.
+
+**Security note:** Using a public/shared `api_id` (e.g., the sample `21724`) is fine for bots but risky for user accounts. For bot-only usage, any `api_id` works. Get your own from my.telegram.org for production use.
+
+### `chunk_size_mb` (default: 19 in Bot API mode, 500 in Pyrogram mode)
+
+Size of each chunk in megabytes.
+
+- **Bot API mode** (no `api_id`): Must be ≤ 19 to stay under Telegram's 20 MB `getFile` download limit. Default: 19.
+- **Pyrogram mode** (`api_id` set): Can be up to 2000 MB (2 GB). Default: 500. Larger chunks = fewer API calls = faster transfers, but smaller chunks = better resume granularity.
 
 Larger chunks = fewer API calls = faster. Smaller chunks = more parallelism but more overhead.
+
+> **Note:** Single-part files (file smaller than `chunk_size`) are uploaded with their original filename — no `.part0001of0001` suffix is added.
 
 ### `upload_delay` (default: 0.3)
 
@@ -189,6 +221,22 @@ Just use `@username` (with the `@` prefix).
   "channels": {
     "main": -1001234567890
   }
+}
+```
+
+### Pyrogram hybrid mode (2 GB chunks, no temp channel needed)
+
+```json
+{
+  "bots": [
+    {"token": "123:ABC...", "username": "my_bot"}
+  ],
+  "channels": {
+    "main": -1001234567890
+  },
+  "api_id": 123456,
+  "api_hash": "your_api_hash_here",
+  "chunk_size_mb": 500
 }
 ```
 

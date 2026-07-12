@@ -44,6 +44,16 @@ Requirements:
 - `cryptography` (for `--encrypt`)
 - `tkinter` (for GUI; built into Python on Windows/macOS, may need `python3-tk` on Linux)
 
+### Optional: Pyrogram Hybrid Mode (2 GB chunks)
+
+To bypass Bot API's 50 MB upload / 20 MB download limits:
+
+```bash
+pip install pyrogram tgcrypto
+```
+
+Then add `api_id` and `api_hash` to your config (see [CONFIGURATION.md](CONFIGURATION.md)).
+
 ## First-time setup
 
 ### Step 1: Get a bot token

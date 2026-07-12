@@ -1,6 +1,6 @@
 # Telegram Bot API Limits Reference
 
-This document summarizes the **hard limits** and **soft rate limits** of the Telegram Bot API that affect tg-vault's design.
+This document summarizes the **hard limits** and **soft rate limits** of the Telegram Bot API that affect tg-vault's design, and how the optional Pyrogram hybrid mode bypasses them.
 
 ## Hard Size Limits (Cloud Bot API)
 
@@ -13,6 +13,25 @@ This document summarizes the **hard limits** and **soft rate limits** of the Tel
 | Caption length | 0–1024 chars | [Bot API: sendDocument](https://core.telegram.org/bots/api#senddocument) |
 | Message text length | 1–4096 chars | [Bot API: sendMessage](https://core.telegram.org/bots/api#sendmessage) |
 | Filename (`file_name`) | Not officially documented; community practice: ≤ 64 chars | [Bot API: Document](https://core.telegram.org/bots/api#document) |
+
+## Hard Size Limits (Pyrogram / MTProto — tg-vault v8.4.0+)
+
+When `api_id` and `api_hash` are configured, tg-vault uses Pyrogram (MTProto) for large file operations:
+
+| Item | Limit | Notes |
+|------|-------|-------|
+| Upload (`sendDocument` via MTProto) | **2000 MB** | 2 GB for bots via Pyrogram |
+| Download (via MTProto) | **2000 MB** | 2 GB for bots via Pyrogram |
+| No `forwardMessage` needed | ✅ | Pyrogram downloads directly from source channel |
+
+**Comparison:**
+
+| Operation | Bot API | Pyrogram hybrid | Improvement |
+|-----------|---------|-----------------|-------------|
+| Upload chunk size | 50 MB | 2 GB | 40× |
+| Download chunk size | 20 MB | 2 GB | 100× |
+| Temp channel needed? | Yes | No | Simplified |
+| Chunks for 1 GB file | ~53 (19 MB each) | 1 (500 MB) | 53× fewer API calls |
 
 ## Soft Rate Limits (per-bot)
 

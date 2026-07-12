@@ -57,7 +57,7 @@ def sync_db_to_channel(config, bot_pool=None, verbose=False):
         return False
 
     if bot_pool is None:
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         if verbose:
             print("❌ No active bots.")
@@ -285,7 +285,7 @@ def find_latest_db_backup(config, bot_pool=None, verbose=False):
         return None
 
     if bot_pool is None:
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         return None
 
@@ -362,7 +362,7 @@ def restore_db_from_channel(config, bot_pool=None, verbose=False):
         return False
 
     if bot_pool is None:
-        bot_pool = BotPool(config.bots)
+        bot_pool = BotPool(config.bots, api_id=config.api_id, api_hash=config.api_hash)
     if len(bot_pool) == 0:
         if verbose:
             print("❌ No active bots.")

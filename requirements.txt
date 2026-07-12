@@ -8,3 +8,9 @@ cryptography>=41.0.0
 # On Linux/macOS: built into Python, no install needed
 # On Windows: requires windows-curses package
 windows-curses>=2.3; sys_platform == "win32"
+
+# Optional: Pyrogram hybrid mode (2 GB chunks)
+# Install with: pip install pyrogram tgcrypto
+# Then set api_id and api_hash in config
+# pyrogram>=2.0.0
+# tgcrypto>=1.2.0

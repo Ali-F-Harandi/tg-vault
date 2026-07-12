@@ -16,6 +16,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync engine (Dropbox-like folder sync, inspired by TAS)
 - FUSE mount (mount Telegram storage as a local folder, inspired by TAS)
 
+## [v8.4.0] — 2026-07-13
+
+### Added
+- **Pyrogram hybrid mode** (optional) — bypass Bot API file size limits:
+  - When `api_id` and `api_hash` are configured, tg-vault uses MTProto (via Pyrogram) for large file operations
+  - Upload limit increased from 50 MB → **2 GB** per chunk
+  - Download limit increased from 20 MB → **2 GB** per chunk
+  - No `forwardMessage` to temp channel needed in Pyrogram mode (direct download)
+  - Default chunk size in Pyrogram mode: 500 MB (configurable up to 2000 MB)
+  - Fully backward compatible — without `api_id`/`api_hash`, works as before (Bot API only)
+  - New `HybridBot` class (`tg_vault/pyrogram_bot.py`) — uses Bot API for small ops, Pyrogram for large files
+  - Automatic fallback to Bot API if Pyrogram not installed or fails to start
+- **Single-part filename fix** — files smaller than `chunk_size` (single-part) are now uploaded with their original filename, no `.part0001of0001` suffix
+- New config fields: `api_id`, `api_hash`
+- New constants: `PYROGRAM_UPLOAD_LIMIT`, `PYROGRAM_DOWNLOAD_LIMIT`, `DEFAULT_PYROGRAM_CHUNK_MB`
+- `BotPool` now accepts `api_id`/`api_hash` parameters and creates `HybridBot` instances when configured
+- `Config.pyrogram_enabled`, `Config.max_upload_size`, `Config.max_download_size` properties
+- Updated all documentation (README, ARCHITECTURE, CONFIGURATION, USAGE, TELEGRAM_LIMITS) with Pyrogram mode info
+
+### Changed
+- `chunk_size_mb` default is now mode-dependent: 19 MB (Bot API) or 500 MB (Pyrogram)
+- `Config.validate()` now checks chunk size against the correct limit based on mode
+- `config.sample.json` includes `api_id` and `api_hash` fields (both `null` by default)
+
+### Dependencies
+- Optional: `pyrogram` and `tgcrypto` for Pyrogram hybrid mode
+- Core dependencies unchanged (`requests`, `cryptography`)
+
+### Inspired by
+- [telegram-downloader](https://github.com/dheison0/telegram-downloader) — demonstrated Pyrogram's MTProto for bypassing Bot API limits
+
 ## [v8.3.0] — 2026-07-12
 
 ### Added

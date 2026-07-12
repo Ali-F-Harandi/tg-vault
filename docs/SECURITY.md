@@ -92,14 +92,28 @@ Verification uses `hmac.compare_digest()` (constant-time comparison) to prevent 
 3. **Don't lose the password** — there is no recovery mechanism
 4. **Use `TG_VAULT_PASSWORD` env var** — avoids the password being in shell history
 5. **Be aware of metadata leakage** — the file name is in plaintext. If the name is sensitive, rename the file before uploading (or use a generic name).
-6. **Keep your config file secure** — `~/.tg-vault.json` contains bot tokens. Set permissions to `600` (`chmod 600 ~/.tg-vault.json`).
+6. **Keep your config file secure** — `~/.tg-vault.json` contains bot tokens AND optionally `api_id`/`api_hash`. Set permissions to `600` (`chmod 600 ~/.tg-vault.json`).
 7. **Use a private channel** — public channels are visible to everyone
+8. **Get your own `api_id`/`api_hash`** — for production use, create your own application at [my.telegram.org](https://my.telegram.org) rather than using a shared/public `api_id`. While bots are generally safe with any `api_id`, using a personal one reduces the risk of being flagged for suspicious activity.
 
 ### File permissions
 
 ```bash
 chmod 600 ~/.tg-vault.json
 chmod 600 ~/.tg-vault.db
+```
+
+### Pyrogram hybrid mode security
+
+When `api_id` and `api_hash` are configured:
+- tg-vault uses MTProto (via Pyrogram) for large file operations
+- The bot authenticates with BOTH the bot token (Bot API) and the `api_id`/`api_hash` (MTProto)
+- Session files are stored in `~/.tg-vault-sessions/` — set permissions to `600`
+- **No additional data is exposed** — the same file content (encrypted or plaintext) is uploaded regardless of mode
+
+```bash
+chmod 700 ~/.tg-vault-sessions/
+chmod 600 ~/.tg-vault-sessions/*
 ```
 
 ## Encryption command examples

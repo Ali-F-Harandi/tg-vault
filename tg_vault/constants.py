@@ -31,6 +31,14 @@ TG_CAPTION_MAX = 1024                          # caption char limit
 TG_TEXT_MAX = 4096                             # message text char limit
 TG_FILENAME_MAX = 60                           # safe max (Telegram undocumented, use 60)
 
+# Pyrogram (MTProto) limits — when api_id/api_hash are configured
+PYROGRAM_UPLOAD_LIMIT = 2000 * 1024 * 1024     # 2 GB upload limit for bots via MTProto
+PYROGRAM_DOWNLOAD_LIMIT = 2000 * 1024 * 1024   # 2 GB download limit for bots via MTProto
+
+# Default chunk sizes
+DEFAULT_CHUNK_MB = 19           # under 20MB download limit (Bot API mode)
+DEFAULT_PYROGRAM_CHUNK_MB = 500 # 500 MB chunks in Pyrogram mode (balance of speed/retry)
+
 # Rate limit (per-bot, conservative)
 BOT_MIN_INTERVAL = 0.05  # 50 ms = max 20 req/sec per bot
 

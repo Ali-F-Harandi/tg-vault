@@ -41,6 +41,7 @@ from .utils import (
 )
 from .config import Config
 from .bot_pool import Bot, BotPool
+from .pyrogram_bot import HybridBot
 from .uploader import Uploader
 from .downloader import Downloader
 from .db import Database
