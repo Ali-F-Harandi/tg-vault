@@ -24,6 +24,7 @@ from .utils import (
     format_size,
     sanitize_hashtags,
     truncate_caption,
+    truncate_text,
     parse_telegram_link,
     build_share_link,
 )
@@ -272,26 +273,79 @@ def cmd_bots(args, config):
             print(f"❌ Invalid index. Use 1 to {len(config.bots)}")
 
 
+def _parse_channel_id(value):
+    """Try to convert a channel ID string to int, or keep as @username."""
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
 def cmd_channels(args, config):
     if args.channels_action == "set":
         if args.name == "main":
-            config.main_channel = args.value
+            config.main_channel = _parse_channel_id(args.value)
             if not config.temp_channel:
-                config.temp_channel = args.value
+                config.temp_channel = config.main_channel
             config.save()
-            print(f"✅ Main channel set: {args.value}")
+            print(f"✅ Main channel set: {config.main_channel}")
             print(f"   Temp channel: {config.temp_channel}")
         elif args.name == "temp":
-            config.temp_channel = args.value
+            config.temp_channel = _parse_channel_id(args.value)
             config.save()
-            print(f"✅ Temp channel set: {args.value}")
+            print(f"✅ Temp channel set: {config.temp_channel}")
         else:
             print("❌ name must be 'main' or 'temp'")
+            print("   Usage: channels set main <ID>")
+            print("          channels set temp <ID>")
 
     elif args.channels_action == "show":
         print("📋 Channels:")
         print(f"   main: {config.main_channel or '(not set)'}")
         print(f"   temp: {config.temp_channel or '(not set)'}")
+        all_chs = config.get_all_storage_channels()
+        if len(all_chs) > 1:
+            print(f"\n   📦 Storage channels ({len(all_chs)}):")
+            for i, ch in enumerate(all_chs, 1):
+                tag = " (main)" if ch == config.main_channel else ""
+                print(f"      {i}. {ch}{tag}")
+        else:
+            print(f"\n   📦 Storage channels: only main (use 'channels add <ID>' to add more)")
+
+    elif args.channels_action == "add":
+        # Add a storage channel
+        # The value might be in args.value or args.name (since argparse may put
+        # a negative number in the first positional arg)
+        ch_str = args.value or args.name
+        if not ch_str:
+            print("❌ Channel ID required: channels add <ID>")
+            return
+        ch_id = _parse_channel_id(ch_str)
+        if config.add_storage_channel(ch_id):
+            config.save()
+            print(f"✅ Added storage channel: {ch_id}")
+            print(f"   Total storage channels: {len(config.get_all_storage_channels())}")
+        else:
+            print(f"⚠️ Channel {ch_id} is already in the storage list.")
+
+    elif args.channels_action == "remove":
+        # Remove a storage channel (can't remove main)
+        ch_str = args.value or args.name
+        if not ch_str:
+            print("❌ Channel ID required: channels remove <ID>")
+            return
+        ch_id = _parse_channel_id(ch_str)
+        if ch_id == config.main_channel:
+            print("❌ Cannot remove the main channel. Use 'channels set main' to change it.")
+            return
+        if config.remove_storage_channel(ch_id):
+            config.save()
+            print(f"✅ Removed storage channel: {ch_id}")
+            print(f"   Remaining storage channels: {len(config.get_all_storage_channels())}")
+        else:
+            print(f"❌ Channel {ch_id} is not in the storage list.")
 
 
 # ==========================================
@@ -344,23 +398,51 @@ def cmd_upload(args, config):
 
     uploader = Uploader(config, bot_pool, db=db)
 
+    # Determine which channel(s) to upload to
+    target_channel = getattr(args, "channel", None)
+    all_channels = getattr(args, "all_channels", False)
+
+    if target_channel:
+        # Parse the channel ID
+        target_channel = _parse_channel_id(target_channel)
+        if not config.is_storage_channel(target_channel):
+            print(f"⚠️ Warning: channel {target_channel} is not in the storage list.")
+            print(f"   Uploading anyway. Use 'channels add {target_channel}' to add it.")
+        upload_channels = [target_channel]
+    elif all_channels:
+        upload_channels = config.get_all_storage_channels()
+        if len(upload_channels) <= 1:
+            print("⚠️ Only one storage channel configured. Use 'channels add' to add more.")
+        print(f"📤 Uploading to ALL {len(upload_channels)} storage channels")
+    else:
+        upload_channels = [config.main_channel]
+
     # Bulk upload
     results = []
-    total = len(files)
-    for i, file_path in enumerate(files, 1):
-        print(f"\n{'=' * 60}")
-        print(f"📤 Uploading file {i}/{total}: {file_path}")
-        print(f"{'=' * 60}")
-        result = uploader.upload(
-            file_path,
-            description=args.desc or "",
-            hashtags=hashtags,
-            resume=args.resume,
-            encrypt=encrypt,
-            password=password,
-            compress=compress,
-        )
-        results.append((file_path, result))
+    total = len(files) * len(upload_channels)
+    idx = 0
+    for file_path in files:
+        for ch_id in upload_channels:
+            idx += 1
+            # Temporarily set main_channel so the uploader uses this channel
+            original_channel = config.main_channel
+            config.main_channel = ch_id
+            print(f"\n{'=' * 60}")
+            ch_label = f" to channel {ch_id}" if len(upload_channels) > 1 else ""
+            print(f"📤 Uploading file {idx}/{total}{ch_label}: {file_path}")
+            print(f"{'=' * 60}")
+            result = uploader.upload(
+                file_path,
+                description=args.desc or "",
+                hashtags=hashtags,
+                resume=args.resume,
+                encrypt=encrypt,
+                password=password,
+                compress=compress,
+                manifest_type=getattr(args, "manifest_type", None) or config.default_manifest_type,
+            )
+            config.main_channel = original_channel  # restore
+            results.append((file_path, result))
 
     # Summary
     print(f"\n{'=' * 60}")
@@ -482,6 +564,9 @@ def cmd_test(args, config):
 
     for name, ch_id in channels.items():
         bot = bot_pool.get_next()
+        if bot is None:
+            print(f"   ❌ {name}: no active bots available")
+            continue
         res = bot.request("getChat", data={"chat_id": ch_id})
         if res and res.get("ok"):
             chat = res["result"]
@@ -857,78 +942,156 @@ def cmd_db(args, config):
             print("   Run: python tg.py db sync")
 
     elif args.db_action == "find-orphans":
-        # Scan main channel for manifest messages not in database
-        print("🔍 Scanning main channel for orphaned files...")
-        bot_pool = BotPool(config.bots)
-        if len(bot_pool) == 0:
-            print("❌ No active bots.")
-            return
-        bot = bot_pool.get_next()
-        main_channel = config.main_channel
-
-        # Get all known message_ids from DB
-        known_msg_ids = set()
-        all_files = db.list_files(limit=10000)
-        for f in all_files:
+        # Scan ALL storage channels for messages not in database.
+        # Uses the batched orphan scanner; results are stored in the `orphans`
+        # table for later review / deletion via `db orphans list|delete|clear`.
+        from .orphan_scanner import scan_orphans
+        max_scan = getattr(args, "max_scan", 500) or 500
+        batch_size = getattr(args, "batch_size", 500) or 500
+        delay = getattr(args, "delay", 0.5)
+        if isinstance(delay, str):
             try:
-                ids = json.loads(f.get("message_ids", "[]"))
-                known_msg_ids.update(ids)
-            except Exception:
-                pass
-            if f.get("manifest_msg_id"):
-                known_msg_ids.add(f["manifest_msg_id"])
-            if f.get("description_msg_id"):
-                known_msg_ids.add(f["description_msg_id"])
+                delay = float(delay)
+            except ValueError:
+                delay = 0.5
+        bot_pool = BotPool(config.bots)
 
-        # Send marker to get current position
-        marker_res = bot.request("sendMessage", data={
-            "chat_id": main_channel, "text": "_orphan_scan_",
-            "disable_notification": True,
-        })
-        if not marker_res or not marker_res.get("ok"):
-            print("❌ Cannot send marker.")
-            return
-        marker_id = marker_res["result"]["message_id"]
-        bot.request("deleteMessage", data={"chat_id": main_channel, "message_id": marker_id})
-
-        # Scan backwards
-        scan_count = min(500, marker_id)
-        orphans = []
-        print(f"   Scanning last {scan_count} messages in main channel...")
-        for check_id in range(marker_id, max(0, marker_id - scan_count), -1):
-            if check_id == marker_id:
+        # Scan all storage channels
+        all_channels = config.get_all_storage_channels()
+        total_stats = {"found_new_orphans": 0, "already_known_orphans": 0,
+                       "scanned_messages": 0, "skipped_known": 0}
+        for i, ch_id in enumerate(all_channels, 1):
+            if len(all_channels) > 1:
+                print(f"\n{'#' * 60}")
+                print(f"📡 Scanning channel {i}/{len(all_channels)}: {ch_id}")
+                print(f"{'#' * 60}")
+            stats = scan_orphans(
+                config, bot_pool=bot_pool,
+                max_scan=max_scan, batch_size=batch_size, delay=delay,
+                verbose=True, channel_id=ch_id,
+            )
+            if "error" in stats:
                 continue
-            if check_id in known_msg_ids:
-                continue  # Known, skip
+            total_stats["found_new_orphans"] += stats.get("found_new_orphans", 0)
+            total_stats["already_known_orphans"] += stats.get("already_known_orphans", 0)
+            total_stats["scanned_messages"] += stats.get("scanned_messages", 0)
+            total_stats["skipped_known"] += stats.get("skipped_known", 0)
 
-            fwd_res = bot.request("forwardMessage", data={
-                "chat_id": main_channel, "from_chat_id": main_channel,
-                "message_id": check_id, "disable_notification": True,
-            })
-            if not fwd_res or not fwd_res.get("ok"):
-                continue
+        if len(all_channels) > 1:
+            print(f"\n{'=' * 60}")
+            print(f"📊 All channels scanned:")
+            print(f"   Total new orphans:         {total_stats['found_new_orphans']}")
+            print(f"   Total existing refreshed:  {total_stats['already_known_orphans']}")
+            print(f"   Total messages scanned:    {total_stats['scanned_messages']}")
+            print(f"   Total known skipped:       {total_stats['skipped_known']}")
+            print(f"{'=' * 60}")
 
-            fwd_msg_id = fwd_res["result"]["message_id"]
-            text = fwd_res["result"].get("text", "")
-            caption = fwd_res["result"].get("caption", "")
-            bot.request("deleteMessage", data={"chat_id": main_channel, "message_id": fwd_msg_id})
+        # Show next steps
+        if total_stats["found_new_orphans"] > 0 or total_stats["already_known_orphans"] > 0:
+            print(f"\n💡 Next steps:")
+            print(f"   python tg.py db orphans list                    — review found orphans")
+            print(f"   python tg.py db orphans delete --ids 1          — delete one orphan (from Telegram + DB)")
+            print(f"   python tg.py db orphans delete --ids 1,2,3      — delete multiple orphans")
+            print(f"   python tg.py db orphans delete --ids all --force — delete ALL orphans")
+            print(f"   python tg.py db orphans clear                   — just clear the local orphan list")
 
-            # Check if it's a manifest (text or file)
-            manifest_text = text if text.startswith(MANIFEST_PREFIX) else caption
-            if manifest_text.startswith(MANIFEST_PREFIX):
-                link = build_share_link(main_channel, check_id)
-                orphans.append((check_id, manifest_text[:80], link))
-
-        if orphans:
-            print(f"\n📋 Found {len(orphans)} orphaned manifest(s):")
-            for msg_id, cap, link in orphans:
-                print(f"   msg {msg_id}: {cap}")
-                if link:
-                    print(f"      🔗 {link}")
-            print(f"\n💡 To delete: python tg.py delete <link> --force")
-            print(f"   Or add to DB: python tg.py download <link>")
+    elif args.db_action == "orphans":
+        # Orphan management subcommand
+        sub = getattr(args, "query", None) or getattr(args, "query_opt", None)
+        if sub == "list" or sub is None:
+            orphans = db.list_orphans(include_deleted=False)
+            if not orphans:
+                print("✅ No orphaned messages in the local DB.")
+                print("   Run `python tg.py db find-orphans` to scan the channel.")
+                return
+            print(f"📋 Orphaned messages in DB ({len(orphans)}):")
+            print(f"{'─' * 110}")
+            print(f"{'ID':<4} {'Msg ID':<8} {'Type':<10} {'Name':<35} {'Size':<10} {'Discovered':<20} {'Link'}")
+            print(f"{'─' * 110}")
+            import time as _time
+            for o in orphans:
+                when = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(o["discovered_at"]))
+                name = (o.get("name") or "?")[:35]
+                link = o.get("share_link") or ""
+                msg_type = o.get("message_type") or "?"
+                size_val = o.get("file_size")
+                size_str = format_size(size_val) if size_val else "—"
+                print(f"{o['id']:<4} {o['msg_id']:<8} {msg_type:<10} {name:<35} "
+                      f"{size_str:<10} {when:<20} {link}")
+            print(f"\n💡 To delete: python tg.py db orphans delete --ids <ID>")
+            print(f"   To delete all: python tg.py db orphans delete --ids all --force")
+        elif sub == "delete":
+            from .orphan_scanner import delete_orphan_from_telegram
+            if getattr(args, "all_matching", False) or getattr(args, "ids", None) == "all":
+                # Delete ALL orphans
+                orphans = db.list_orphans(include_deleted=False)
+                if not orphans:
+                    print("✅ No orphans to delete.")
+                    return
+                if not getattr(args, "force", False):
+                    confirm = input(f"   Delete ALL {len(orphans)} orphans from Telegram + DB? (yes/no): ")
+                    if confirm.strip().lower() != "yes":
+                        print("Cancelled.")
+                        return
+                bot_pool = BotPool(config.bots)
+                total = len(orphans)
+                ok = 0
+                for i, o in enumerate(orphans, 1):
+                    print(f"\n[{i}/{total}] Deleting orphan #{o['id']} — {o.get('name', '?')}")
+                    if delete_orphan_from_telegram(
+                        config, o["id"], bot_pool=bot_pool, verbose=True, force=True
+                    ):
+                        ok += 1
+                print(f"\n📊 Deleted {ok}/{total} orphans.")
+            elif getattr(args, "ids", None):
+                # Delete multiple by comma-separated IDs (also accepts single ID)
+                try:
+                    ids = [int(x.strip()) for x in args.ids.split(",") if x.strip()]
+                except ValueError:
+                    print(f"❌ Invalid IDs: {args.ids}")
+                    return
+                bot_pool = BotPool(config.bots)
+                ok = 0
+                for oid in ids:
+                    if delete_orphan_from_telegram(
+                        config, oid, bot_pool=bot_pool, verbose=True,
+                        force=getattr(args, "force", True),  # skip per-file confirm, already bulk
+                    ):
+                        ok += 1
+                print(f"\n📊 Deleted {ok}/{len(ids)} orphans.")
+            else:
+                print("❌ Specify what to delete:")
+                print("   python tg.py db orphans delete --ids 1            — single orphan")
+                print("   python tg.py db orphans delete --ids 1,2,3         — multiple orphans")
+                print("   python tg.py db orphans delete --ids all --force   — delete ALL orphans")
+                print("   python tg.py db orphans delete --all-matching --force — same as --ids all")
+        elif sub == "clear":
+            # Just clear the local DB rows (doesn't touch Telegram)
+            n = db.clear_orphans(include_deleted=False)
+            print(f"✅ Cleared {n} orphan row(s) from the local DB.")
+            print("   (Messages in Telegram were NOT deleted.)")
+        elif sub == "count":
+            print(f"📊 Orphans in local DB: {db.orphan_count()}")
         else:
-            print(f"\n✅ No orphans found! All manifests are in the database.")
+            print(f"❌ Unknown orphan action: {sub}")
+            print("   Valid actions: list, delete, clear, count")
+
+    elif args.db_action == "edit":
+        # Edit description and/or tags of an uploaded file.
+        _db_edit(args, config, db)
+
+    elif args.db_action == "verify":
+        # Verify database integrity — check for share_link vs manifest_msg_id
+        # mismatches (caused by the old update_share_link bug)
+        _db_verify(config, db, force=getattr(args, "force", False))
+
+    elif args.db_action == "find-missing":
+        # Check each file in DB — is its manifest still in the channel?
+        _db_find_missing(config, db)
+
+    elif args.db_action == "clear-temp":
+        # Delete ALL messages from temp channel except DB backup
+        _db_clear_temp_keep_db(config, db)
 
     elif args.db_action == "delete":
         # Delete a file by ID from both Telegram and database
@@ -1118,3 +1281,635 @@ def _db_download(args, config, db):
     print(f"\n{'=' * 60}")
     print(f"📊 Download summary: {success_count}/{total} files downloaded successfully")
     print(f"{'=' * 60}")
+
+
+# ==========================================
+# Edit file metadata (description + tags)
+# ==========================================
+def _db_edit(args, config, db):
+    """Edit description and/or tags of one or more uploaded files.
+
+    Updates both:
+      - The Telegram description message (editMessageText)
+      - The Telegram manifest message (editMessageText or editMessageCaption)
+      - The database record (files.description, files.hashtags, files.tags)
+
+    Usage:
+        # Single file
+        python tg.py db edit <ID> --desc "New description" --tag new,tags
+        python tg.py db edit <ID> --desc "New description only"
+        python tg.py db edit <ID> --tag new,tags,only
+
+        # Bulk edit multiple files
+        python tg.py db edit --ids 1,2,3 --desc "Shared description" --tag batch,2026
+        python tg.py db edit --ids 1,2,3 --add-tag backup          # add tag to all
+        python tg.py db edit --ids 1,2,3 --remove-tag old          # remove tag from all
+        python tg.py db edit --ids 1,2,3 --desc "New desc"         # set same desc for all
+
+    Modes:
+      --tag X,Y,Z      Replace all tags with X,Y,Z
+      --add-tag X      Add tag X (preserves existing tags, dedupes)
+      --remove-tag X   Remove tag X if present
+
+    Note: Only works for files with a text manifest (manifest_type='text').
+    File manifests (manifest_type='file') cannot be edited because the JSON
+    is inside a file attachment, not editable text. Use --manifest-type text
+    on upload to ensure editability.
+    """
+    new_desc = getattr(args, "desc", None)
+    new_tag_str = getattr(args, "tag", None)
+    add_tag_str = getattr(args, "add_tag", None)
+    remove_tag_str = getattr(args, "remove_tag", None)
+    ids_str = getattr(args, "ids", None)
+
+    # Determine target file IDs
+    file_ids = []
+    if ids_str:
+        # Bulk mode: --ids 1,2,3
+        try:
+            file_ids = [int(x.strip()) for x in ids_str.split(",") if x.strip()]
+        except ValueError:
+            print(f"❌ Invalid IDs: {ids_str}")
+            return
+    elif args.query:
+        # Single file mode
+        try:
+            file_ids = [int(args.query)]
+        except ValueError:
+            print(f"❌ Invalid file ID: {args.query}")
+            return
+    else:
+        print("❌ File ID required:")
+        print("   python tg.py db edit <ID> --desc \"...\" --tag ...")
+        print("   python tg.py db edit --ids 1,2,3 --desc \"...\" --tag ...")
+        return
+
+    if not file_ids:
+        print("❌ No file IDs specified.")
+        return
+
+    # Parse tag operations
+    replace_tags = None
+    add_tags = []
+    remove_tags = []
+
+    if new_tag_str:
+        raw_tags = [t.strip() for t in new_tag_str.split(",") if t.strip()]
+        replace_tags = sanitize_hashtags(raw_tags)
+        if len(replace_tags) != len(raw_tags):
+            print(f"⚠️ Some tags were sanitized:")
+            print(f"   Original: {raw_tags}")
+            print(f"   Sanitized: {replace_tags}")
+
+    if add_tag_str:
+        raw_add = [t.strip() for t in add_tag_str.split(",") if t.strip()]
+        add_tags = sanitize_hashtags(raw_add)
+
+    if remove_tag_str:
+        raw_rem = [t.strip() for t in remove_tag_str.split(",") if t.strip()]
+        remove_tags = [t.lower() for t in raw_rem]
+
+    # Check if we have anything to do
+    if not new_desc and replace_tags is None and not add_tags and not remove_tags:
+        # Show current state
+        if len(file_ids) == 1:
+            file_id = file_ids[0]
+            record = db.get_file_by_id(file_id)
+            if not record:
+                print(f"❌ No file with ID {file_id}")
+                return
+            print(f"📄 Current file: #{file_id} — {record['name']}")
+            print(f"   Description: {record.get('description') or '(empty)'}")
+            try:
+                current_tags = json.loads(record.get("hashtags", "[]"))
+            except Exception:
+                current_tags = []
+            print(f"   Hashtags: {', '.join(current_tags) if current_tags else '(empty)'}")
+            print(f"\n💡 To edit:")
+            print(f"   python tg.py db edit {file_id} --desc \"New description\"")
+            print(f"   python tg.py db edit {file_id} --tag new,tags,here")
+            print(f"   python tg.py db edit {file_id} --add-tag backup")
+            print(f"   python tg.py db edit {file_id} --remove-tag old")
+        else:
+            print(f"📄 {len(file_ids)} files selected for bulk edit: {file_ids}")
+            print(f"\n💡 To edit:")
+            print(f"   python tg.py db edit --ids {','.join(map(str, file_ids))} --desc \"New desc\"")
+            print(f"   python tg.py db edit --ids {','.join(map(str, file_ids))} --add-tag backup")
+            print(f"   python tg.py db edit --ids {','.join(map(str, file_ids))} --remove-tag old")
+        return
+
+    # Bulk or single edit
+    print(f"📄 Editing {len(file_ids)} file(s): {file_ids}")
+    if new_desc is not None:
+        print(f"   Set description: {new_desc}")
+    if replace_tags is not None:
+        print(f"   Replace tags: {replace_tags}")
+    if add_tags:
+        print(f"   Add tags: {add_tags}")
+    if remove_tags:
+        print(f"   Remove tags: {remove_tags}")
+    print()
+
+    bot_pool = BotPool(config.bots)
+    if len(bot_pool) == 0:
+        print("❌ No active bots.")
+        return
+
+    success_count = 0
+    for file_id in file_ids:
+        record = db.get_file_by_id(file_id)
+        if not record:
+            print(f"❌ No file with ID {file_id}")
+            continue
+
+        # Compute the final tags for this file
+        try:
+            current_tags = json.loads(record.get("hashtags", "[]")) if record.get("hashtags") else []
+        except Exception:
+            current_tags = []
+
+        if replace_tags is not None:
+            final_tags = list(replace_tags)
+        else:
+            final_tags = list(current_tags)
+
+        # Add tags (dedupe case-insensitive)
+        if add_tags:
+            existing_lower = {t.lower() for t in final_tags}
+            for t in add_tags:
+                if t.lower() not in existing_lower:
+                    final_tags.append(t)
+                    existing_lower.add(t.lower())
+
+        # Remove tags
+        if remove_tags:
+            final_tags = [t for t in final_tags if t.lower() not in remove_tags]
+
+        # Compute final description
+        final_desc = new_desc if new_desc is not None else (record.get("description") or "")
+
+        # Show per-file changes
+        print(f"  #{file_id} {record['name']}")
+        if new_desc is not None:
+            print(f"     desc: '{record.get('description') or ''}' → '{final_desc}'")
+        if final_tags != current_tags:
+            print(f"     tags: {current_tags} → {final_tags}")
+
+        # Apply the edit
+        if _apply_file_edit(config, bot_pool, db, record, final_desc, final_tags):
+            success_count += 1
+        else:
+            print(f"     ⚠️ Partial failure for file #{file_id}")
+
+    print(f"\n📊 Done: {success_count}/{len(file_ids)} files updated successfully.")
+
+
+def _apply_file_edit(config, bot_pool, db, record, new_desc, new_tags):
+    """Apply a single-file edit (description + tags) to Telegram + DB.
+
+    Args:
+        record: The DB file record dict.
+        new_desc: The new description string.
+        new_tags: The new tags list (replaces all existing tags).
+
+    Returns True on success, False on partial failure.
+    """
+    bot = bot_pool.get_next()
+    file_id = record["id"]
+    channel_id = record.get("main_channel") or config.main_channel
+    desc_msg_id = record.get("description_msg_id")
+    manifest_msg_id = record.get("manifest_msg_id")
+
+    # Get current tags (for comparison)
+    try:
+        current_tags = json.loads(record.get("hashtags", "[]")) if record.get("hashtags") else []
+    except Exception:
+        current_tags = []
+
+    success = True
+
+    # 1. Edit the description message (if description or tags changed)
+    if desc_msg_id and (new_desc != (record.get("description") or "") or new_tags != current_tags):
+        lines = [
+            f"📦 File: {record['name']}",
+            f"💾 Size: {format_size(record['size'])}",
+            f"🔢 Parts: {record['total_parts']}",
+            f"🔐 SHA256: {record['sha256']}",
+        ]
+        if new_desc:
+            lines.append("")
+            lines.append("📝 Description:")
+            lines.append(new_desc)
+        if new_tags:
+            lines.append("")
+            tag_str = " ".join(f"#{t.lstrip('#')}" for t in new_tags)
+            lines.append(tag_str)
+
+        new_text = truncate_text("\n".join(lines))
+        res = bot.request("editMessageText", data={
+            "chat_id": channel_id,
+            "message_id": desc_msg_id,
+            "text": new_text,
+            "disable_web_page_preview": True,
+        })
+        if not (res and res.get("ok")):
+            err = res.get("description") if res else "No response"
+            print(f"     ⚠️ Description message edit failed: {err}")
+            success = False
+
+    # 2. Edit the manifest message
+    if manifest_msg_id:
+        manifest = _reconstruct_manifest_from_db(record)
+        manifest["description"] = new_desc
+        manifest["hashtags"] = new_tags
+
+        from .constants import MANIFEST_PREFIX
+        header = f"{MANIFEST_PREFIX}|{manifest['name']}|{manifest['total_parts']}|{manifest['sha256'][:16]}"
+        json_str = json.dumps(manifest, ensure_ascii=False, separators=(',', ':'))
+        new_manifest_text = header + "\n" + json_str
+
+        if len(new_manifest_text) > 4090:
+            print(f"     ⚠️ Manifest text too long ({len(new_manifest_text)} chars) — skipped Telegram edit")
+        else:
+            res = bot.request("editMessageText", data={
+                "chat_id": channel_id,
+                "message_id": manifest_msg_id,
+                "text": new_manifest_text,
+                "disable_web_page_preview": True,
+            })
+            if not (res and res.get("ok")):
+                # Try caption fallback (file manifest)
+                caption_res = bot.request("editMessageCaption", data={
+                    "chat_id": channel_id,
+                    "message_id": manifest_msg_id,
+                    "caption": truncate_caption(header),
+                })
+                if not (caption_res and caption_res.get("ok")):
+                    print(f"     ⚠️ Manifest edit failed (text + caption)")
+                    success = False
+
+    # 3. Update the database record
+    try:
+        with get_db_conn(config.get_db_path()) as conn:
+            conn.execute("UPDATE files SET description=? WHERE id=?", (new_desc, file_id))
+            import json as _json
+            tags_json = _json.dumps(new_tags)
+            tags_csv = ",".join(new_tags)
+            conn.execute("UPDATE files SET hashtags=?, tags=? WHERE id=?",
+                         (tags_json, tags_csv, file_id))
+            conn.execute("DELETE FROM tags WHERE file_id=?", (file_id,))
+            import time as _time
+            now = int(_time.time())
+            for tag in new_tags:
+                conn.execute("INSERT OR IGNORE INTO tags (file_id, tag, created_at) VALUES (?,?,?)",
+                             (file_id, tag, now))
+    except Exception as e:
+        print(f"     ⚠️ Database update failed: {e}")
+        success = False
+
+    return success
+
+
+def _reconstruct_manifest_from_db(record):
+    """Reconstruct a manifest dict from a database file record."""
+    import json as _json
+    try:
+        message_ids = _json.loads(record.get("message_ids", "[]"))
+    except Exception:
+        message_ids = []
+    try:
+        hashtags = _json.loads(record.get("hashtags", "[]"))
+    except Exception:
+        hashtags = []
+
+    manifest = {
+        "name": record["name"],
+        "size": record["size"],
+        "total_parts": record["total_parts"],
+        "chunk_size": record.get("chunk_size", 0),
+        "message_ids": message_ids,
+        "sha256": record["sha256"],
+        "channel_id": record.get("main_channel", ""),
+        "description_msg_id": record.get("description_msg_id"),
+        "description": record.get("description", ""),
+        "hashtags": hashtags,
+        "session_id": record.get("session_id", ""),
+        "version": 8,
+        "created_at": record.get("uploaded_at", 0),
+        "encrypted": bool(record.get("encrypted")),
+        "compressed": bool(record.get("compressed")),
+        "has_chunk_header": bool(record.get("has_chunk_header")),
+        "manifest_type": "text",
+        "manifest_message_id": record.get("manifest_msg_id"),
+    }
+    if record.get("encryption_salt"):
+        manifest["encryption_salt"] = record["encryption_salt"]
+        manifest["encryption_algorithm"] = record.get("encryption_algorithm", "aes-256-gcm")
+        manifest["encryption_kdf"] = record.get("encryption_kdf", "pbkdf2-sha512-600k")
+    return manifest
+
+
+def get_db_conn(db_path):
+    """Get a SQLite connection (used by _db_edit for direct updates)."""
+    import sqlite3
+    from .db import get_conn
+    return get_conn(db_path)
+
+
+# ==========================================
+# Database integrity verification
+# ==========================================
+def _db_verify(config, db, force=False):
+    """Verify database integrity.
+
+    Checks for:
+      1. share_link vs manifest_msg_id mismatches (caused by the old
+         update_share_link bug where re-uploaded files only had their
+         share_link updated, not message_ids/manifest_msg_id)
+
+    For each mismatch, offers to fix by fetching the manifest from the
+    share_link and updating the DB record.
+    """
+    print("🔍 Verifying database integrity...\n")
+
+    all_files = db.list_files(limit=100000, status=None)
+    mismatches = []
+
+    for f in all_files:
+        link = f.get("share_link") or ""
+        manifest_msg_id = f.get("manifest_msg_id")
+
+        if not link or not manifest_msg_id:
+            continue
+
+        # Extract msg_id from link
+        try:
+            link_msg = int(link.rsplit("/", 1)[1])
+        except (ValueError, IndexError):
+            continue
+
+        if link_msg != manifest_msg_id:
+            mismatches.append(f)
+
+    if not mismatches:
+        print("✅ All records are consistent. No mismatches found.")
+        return
+
+    print(f"⚠️ Found {len(mismatches)} file(s) with share_link / manifest_msg_id mismatch:")
+    print(f"   (These were likely re-uploaded, but the DB wasn't fully updated.)\n")
+
+    for f in mismatches:
+        link = f["share_link"]
+        link_msg = int(link.rsplit("/", 1)[1])
+        print(f"  #{f['id']} {f['name']}")
+        print(f"     DB manifest_msg_id: {f['manifest_msg_id']}")
+        print(f"     share_link points to: {link_msg}")
+        print(f"     message_ids: {f.get('message_ids', '[]')[:80]}...")
+        print()
+
+    print("💡 To fix: the tool will fetch the manifest from the share_link")
+    print("   and update message_ids, manifest_msg_id, description_msg_id.")
+    print()
+
+    if not config.bots:
+        print("❌ No bots configured — cannot fetch manifests to fix.")
+        return
+
+    bot_pool = BotPool(config.bots)
+    if len(bot_pool) == 0:
+        print("❌ No active bots — cannot fetch manifests to fix.")
+        return
+
+    if not force:
+        confirm = input(f"Fix all {len(mismatches)} mismatches now? (yes/no): ")
+        if confirm.strip().lower() != "yes":
+            print("Cancelled.")
+            return
+
+    from .downloader import Downloader
+    downloader = Downloader(config, bot_pool)
+
+    fixed = 0
+    for f in mismatches:
+        link = f["share_link"]
+        file_id = f["id"]
+        name = f["name"]
+        db_manifest_msg_id = f["manifest_msg_id"]
+        channel_id_str = f.get("main_channel", "") or str(config.main_channel)
+        # Parse channel ID (could be string like "-100..." or "@username")
+        try:
+            channel_id = int(channel_id_str)
+        except (ValueError, TypeError):
+            channel_id = channel_id_str
+
+        print(f"\n  Fixing #{file_id} {name}...")
+
+        # Build a list of message IDs to try, in order of preference:
+        # 1. manifest_msg_id from DB (the first upload's manifest — most likely to still exist)
+        # 2. message_id from share_link (the re-uploaded manifest — may have been deleted)
+        candidates = []
+        if db_manifest_msg_id:
+            candidates.append(("manifest_msg_id", db_manifest_msg_id))
+        try:
+            link_msg = int(link.rsplit("/", 1)[1])
+            if link_msg != db_manifest_msg_id:
+                candidates.append(("share_link", link_msg))
+        except (ValueError, IndexError):
+            pass
+
+        manifest = None
+        working_msg_id = None
+        for source_label, msg_id in candidates:
+            print(f"     Trying {source_label} (msg {msg_id})...")
+            try:
+                manifest = downloader._fetch_manifest(channel_id, msg_id)
+                downloader._cleanup()
+                if manifest:
+                    working_msg_id = msg_id
+                    print(f"     ✅ Found manifest at msg {msg_id}")
+                    break
+            except Exception as e:
+                print(f"     ⚠️ Failed: {e}")
+
+        if not manifest:
+            print(f"     ❌ Cannot fetch manifest from any known message ID")
+            print(f"        The file may need to be re-uploaded. Marking as 'corrupted'.")
+            with get_db_conn(config.get_db_path()) as conn:
+                conn.execute("UPDATE files SET status='corrupted' WHERE id=?", (file_id,))
+            continue
+
+        # Build the correct share_link from the working message
+        correct_share_link = build_share_link(channel_id, working_msg_id)
+        if correct_share_link is None:
+            correct_share_link = link  # fallback to old link
+
+        # Ensure manifest_message_id is set (it's not in the manifest JSON content,
+        # it's added by the uploader after sending the manifest message)
+        manifest["manifest_message_id"] = working_msg_id
+
+        # Update the DB record with the correct manifest data
+        db.update_share_link(file_id, correct_share_link, manifest=manifest)
+        print(f"     ✅ Updated DB:")
+        print(f"        share_link → {correct_share_link}")
+        print(f"        message_ids → {manifest.get('message_ids', [])[:5]}...")
+        print(f"        manifest_msg_id → {manifest.get('manifest_message_id')}")
+        fixed += 1
+
+    print(f"\n📊 Fixed {fixed}/{len(mismatches)} files.")
+    if fixed < len(mismatches):
+        print("   Files that couldn't be fixed were marked as 'corrupted'.")
+        print("   You may need to re-upload them.")
+
+
+def _db_find_missing(config, db):
+    """Check each file in DB — is its manifest still accessible in the channel?
+
+    For each file, tries to forwardMessage the manifest from the main channel.
+    If it fails, the file is marked as 'corrupted' in the DB.
+
+    Files marked as 'corrupted' can be cleaned up or re-uploaded.
+    """
+    print("🔍 Checking for missing files...\n")
+
+    all_files = db.list_files(limit=100000, status="uploaded")
+    if not all_files:
+        print("No uploaded files to check.")
+        return
+
+    bot_pool = BotPool(config.bots)
+    if len(bot_pool) == 0:
+        print("❌ No active bots.")
+        return
+
+    bot = bot_pool.get_next()
+    missing = []
+    ok = 0
+
+    for i, f in enumerate(all_files, 1):
+        file_id = f["id"]
+        name = f["name"]
+        manifest_msg_id = f.get("manifest_msg_id")
+        channel_id_str = f.get("main_channel", "") or str(config.main_channel)
+        try:
+            channel_id = int(channel_id_str)
+        except (ValueError, TypeError):
+            channel_id = channel_id_str
+
+        # Build candidates to try: manifest_msg_id first, then share_link
+        candidates = []
+        if manifest_msg_id:
+            candidates.append(manifest_msg_id)
+        link = f.get("share_link") or ""
+        if link:
+            try:
+                link_msg = int(link.rsplit("/", 1)[1])
+                if link_msg not in candidates:
+                    candidates.append(link_msg)
+            except (ValueError, IndexError):
+                pass
+
+        if not candidates:
+            print(f"  [{i}/{len(all_files)}] #{file_id} {name} — ⚠️ no manifest_msg_id or share_link")
+            continue
+
+        # Try each candidate
+        found = False
+        for msg_id in candidates:
+            fwd_res = bot.request("forwardMessage", data={
+                "chat_id": config.temp_channel,
+                "from_chat_id": channel_id,
+                "message_id": msg_id,
+                "disable_notification": True,
+            })
+            if fwd_res and fwd_res.get("ok"):
+                # Manifest exists — delete the forwarded copy
+                fwd_msg_id = fwd_res["result"]["message_id"]
+                bot.request("deleteMessage", data={
+                    "chat_id": config.temp_channel, "message_id": fwd_msg_id,
+                })
+                found = True
+                # If we found it at a different message_id than manifest_msg_id,
+                # update the DB
+                if msg_id != manifest_msg_id:
+                    print(f"  [{i}/{len(all_files)}] #{file_id} {name} — ⚠️ manifest at msg {msg_id} (DB says {manifest_msg_id}) — fixing DB")
+                    with get_db_conn(config.get_db_path()) as conn:
+                        conn.execute("UPDATE files SET manifest_msg_id=?, status='uploaded' WHERE id=?",
+                                     (msg_id, file_id))
+                else:
+                    print(f"  [{i}/{len(all_files)}] #{file_id} {name} — ✅ OK")
+                break
+
+        if found:
+            ok += 1
+        else:
+            err = "message to forward not found"
+            print(f"  [{i}/{len(all_files)}] #{file_id} {name} — ❌ MISSING ({err})")
+            missing.append(f)
+            # Mark as corrupted in DB
+            with get_db_conn(config.get_db_path()) as conn:
+                conn.execute("UPDATE files SET status='corrupted' WHERE id=?", (file_id,))
+
+    print(f"\n{'=' * 50}")
+    print(f"📊 Results:")
+    print(f"   Total checked:  {len(all_files)}")
+    print(f"   OK:             {ok}")
+    print(f"   Missing:        {len(missing)}")
+    if missing:
+        print(f"\n   Missing files:")
+        for f in missing:
+            print(f"     #{f['id']} {f['name']} (manifest was at msg {f['manifest_msg_id']})")
+        print(f"\n💡 These files were marked as 'corrupted' in the DB.")
+        print(f"   You may need to re-upload them or fix the manifest message IDs.")
+
+
+def _db_clear_temp_keep_db(config, db):
+    """Delete ALL messages from the temp channel EXCEPT the DB backup.
+
+    The DB backup message ID is stored in config.db_sync_msg_id.
+    """
+    temp_channel = config.temp_channel
+    if not temp_channel:
+        print("❌ Temp channel not set.")
+        return
+
+    bot_pool = BotPool(config.bots)
+    if len(bot_pool) == 0:
+        print("❌ No active bots.")
+        return
+
+    bot = bot_pool.get_next()
+
+    # Send a marker to find the latest message ID
+    marker_res = bot.request("sendMessage", data={
+        "chat_id": temp_channel, "text": "_clear_temp_marker_",
+        "disable_notification": True,
+    })
+    if not marker_res or not marker_res.get("ok"):
+        print("❌ Cannot send marker.")
+        return
+    marker_id = marker_res["result"]["message_id"]
+    bot.request("deleteMessage", data={
+        "chat_id": temp_channel, "message_id": marker_id,
+    })
+
+    db_backup_msg_id = config.db_sync_msg_id
+
+    print(f"🧹 Clearing temp channel {temp_channel} (keeping DB backup at msg {db_backup_msg_id})...")
+    print(f"   Scanning {marker_id} messages...")
+
+    deleted = 0
+    for msg_id in range(marker_id, 0, -1):
+        if msg_id == db_backup_msg_id:
+            continue  # keep DB backup
+        res = bot.request("deleteMessage", data={
+            "chat_id": temp_channel,
+            "message_id": msg_id,
+        })
+        if res and res.get("ok"):
+            deleted += 1
+        if msg_id % 100 == 0:
+            print(f"   ... deleted {deleted} so far (at msg {msg_id})")
+
+    print(f"\n✅ Deleted {deleted} messages from temp channel.")
+    if db_backup_msg_id:
+        print(f"   DB backup (msg {db_backup_msg_id}) was preserved.")

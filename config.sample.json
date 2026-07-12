@@ -7,12 +7,14 @@
   ],
   "channels": {
     "main": -1001234567890,
-    "temp": -1009876543210
+    "temp": -1009876543210,
+    "storage": null
   },
   "chunk_size_mb": 19,
   "upload_delay": 0.3,
   "download_delay": 0.2,
   "parallel_workers": 4,
+  "default_manifest_type": "text",
   "db_enabled": true,
   "db_path": null,
   "db_sync_channel": null,

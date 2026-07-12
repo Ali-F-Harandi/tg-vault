@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Version: v8](https://img.shields.io/badge/version-v8-green.svg)](CHANGELOG.md)
+[![Version: v8.3.0](https://img.shields.io/badge/version-v8.3.0-green.svg)](CHANGELOG.md)
 
 > 📖 فارسی | [English](README.md)
 
@@ -16,20 +16,63 @@ tg-vault تلگرام را به یک **درایو ابری شخصی نامحدو
 
 Bot API تلگرام یک محدودیت نامتقارن دارد: `sendDocument` تا ۵۰ مگابایت آپلود قبول می‌کند ولی `getFile` فقط ۲۰ مگابایت دانلود می‌دهد. tg-vault فایل‌ها را به chunk‌های ۱۹ مگابایتی تقسیم می‌کند، هر کدام را به‌عنوان پیام `document` (با reply به پیام قبلی) در کانالی که بات ادمین است آپلود می‌کند، و در نهایت یک پیام **manifest** می‌فرستد که شامل متادیتای فایل (نام، اندازه، SHA256 و لیست `message_id` همه chunk‌ها) است. برای دانلود فقط به لینک manifest نیاز دارید.
 
-## قابلیت‌ها
+## قابلیت‌ها (v8.3.0)
 
+### هسته اصلی
 - 🚀 **چند باتی با چرخش round-robin** — N بات = N برابر throughput
 - ⚡ **دانلود موازی chunk‌ها** با `ThreadPoolExecutor`
 - 🛡️ **محدودیت FloodWait-safe** per-bot (حداقل ۵۰ میلی‌ثانیه فاصله)
 - 🔐 **رمزنگاری AES-256-GCM** (PBKDF2-HMAC-SHA512، ۶۰۰ هزار iteration) — zero-knowledge
 - 📦 **فشرده‌سازی هوشمند gzip** — به‌صورت خودکار فرمت‌های فشرده (mp4, jpg, zip, pdf, …) را skip می‌کند
 - 🏷️ **هدر خودتوصیف chunk** (magic `TGV1`) — شناسایی chunk بدون مراجعه به DB
-- 🗄️ **دیتابیس SQLite** با جستجوی full-text، تگ، تاریخچه دانلود و sync به کانال
+- 🗄️ **دیتابیس SQLite** با جستجوی full-text، تگ و تاریخچه دانلود
 - ⏯️ **Resume** هم برای آپلود و هم برای دانلود
-- 🧹 **پاکسازی امن Ctrl+C** — پیام‌های موقت همیشه حذف می‌شوند
-- 🖥️ **CLI، منوی تعاملی و GUI tkinter** (با پشتیبانی proxy)
 - 🌐 **آپلود/دانلود bulk** — چندین فایل/لینک همزمان
-- 🔗 **اشتراک‌گذاری با لینک** — فقط `https://t.me/c/<chat>/<msg>` کافی است
+- 📝 **manifest JSON فشرده** (`separators=(',',':')`)
+
+### مدیریت دانلود (GUI)
+- 🎯 **مدیریت دانلود به سبک IDM** در GUI tkinter
+- ⏸️ **Pause / resume / cancel** برای چند دانلود همزمان
+- 💾 **ماندگاری دانلودها بین راه‌اندازی‌های GUI** (`downloads.json`)
+- 🔢 **کنترل همزمانی** با semaphore (محدود کردن API call‌ها به تعداد بات‌ها)
+- 📂 **پوشه موقت** (`.temp/`) برای دانلودهای ناتمام
+- 📊 **نمایش لحظه‌ای پیشرفت و سرعت**
+- ✋ **انتخاب چندگانه** (Ctrl+click، Shift+click) برای عملیات گروهی
+
+### پشتیبانی چند کاناله
+- 📡 آپلود به **چند کانال ذخیره‌سازی**
+- دستورات `channels add / remove / show`
+- پرچم‌های `--channel` و `--all-channels`
+- 🔍 اسکن orphan روی **همه** کانال‌های ذخیره‌سازی
+
+### مدیریت دیتابیس
+- 🔧 `db verify` — اصلاح عدم تطابق `share_link` / `manifest_msg_id`
+- ❓ `db find-missing` — بررسی وجود فایل‌های DB در کانال
+- 🧹 `db clear-temp` — حذف همه پیام‌های موقت کانال به‌جز بکاپ DB
+- ✏️ `db edit` — ویرایش توضیحات/تگ (تکی + گروهی، با `--add-tag` / `--remove-tag`)
+- 🔄 **auto-sync دیتابیس** به کانال تلگرام (تک‌بخشی و چندبخشی برای DBهای > ۱۹ مگابایت)
+- 🗑️ پاکسازی بکاپ DB (بکاپ‌های قدیمی به‌درستی حذف می‌شوند)
+
+### اسکنر Orphan (بهبودیافته)
+- 🕵️ شناسایی **همه نوع پیام** (text، photo، video، sticker، audio، voice و ...)
+- 💽 ذخیره orphan‌ها در DB محلی (بدون نیاز به اسکن مجدد)
+- 📦 اسکن دسته‌ای (`--max-scan`، `--batch-size`، `--delay`)
+- 🧨 حذف orphan‌ها به‌صورت تکی یا گروهی
+- 🛡️ ایمنی: `message_id`‌های `share_link` به مجموعه شناخته‌شده اضافه می‌شوند
+
+### انتخاب نوع Manifest
+- ⚙️ فیلد کانفیگ `default_manifest_type` (`text` / `file` / `auto`، پیش‌فرض: `text`)
+- 🚩 پرچم CLI `--manifest-type text|file|auto`
+- ✏️ manifest متنی قابل ویرایش (`editMessageText`)
+- 📄 manifest فایلی برای manifest‌های خیلی بزرگ (> ۴۰۹۰ کاراکتر)
+
+### GUI
+- 🖥️ **۵ تب**: Upload، Download Manager، Browse، Orphans، Configuration
+- 📋 منوی راست‌کلیک **کپی/پیست** برای همه ویجت‌های Entry و Text
+- 🏷️ تب Browse: ستون‌های Tags و Description، پنل ویرایش inline با پشتیبانی گروهی
+- ⚙️ تب Configuration: ویرایشگر کامل کانفیگ (bots، channels، advanced، DB، proxy، storage channels)
+- 📌 نوار وضعیت ثابت در پایین
+- 🌐 **پشتیبانی از proxy** (سیستمی یا سفارشی)
 
 ## شروع سریع
 
@@ -60,6 +103,37 @@ python tg.py delete https://t.me/c/1234567890/42 --force
 
 همچنین می‌توانید به‌صورت ماژول اجرا کنید: `python -m tg_vault upload file.zip`.
 
+## دستورات CLI
+
+```
+# راه‌اندازی
+tg.py init / setup / test
+
+# بات‌ها
+tg.py bots add/list/remove
+
+# کانال‌ها
+tg.py channels set/show/add/remove
+
+# آپلود / دانلود
+tg.py upload <files> [--desc --tag --encrypt --password --no-compress
+                      --channel --all-channels --manifest-type]
+tg.py download <links> [--links-file --output --output-dir --password --resume]
+
+# مدیریت فایل
+tg.py info / ls / delete / cleanup
+
+# دیتابیس (فعال‌سازی، query و مدیریت)
+tg.py db enable/disable/info/list/search/stats/export
+tg.py db query/count/download/sync/restore/vacuum/find
+tg.py db find-orphans [--max-scan --batch-size --delay]
+tg.py db orphans list/delete/clear/count
+tg.py db edit <ID> / --ids 1,2,3 [--desc --tag --add-tag --remove-tag]
+tg.py db verify [--force]
+tg.py db find-missing
+tg.py db clear-temp
+```
+
 ## رمزنگاری
 
 ```bash
@@ -79,14 +153,21 @@ python tg.py download https://t.me/c/.../42
 ## دیتابیس (اختیاری، پیشنهادی)
 
 ```bash
-python tg.py db enable                        # فعال‌سازی دیتابیس SQLite
-python tg.py db list                          # لیست فایل‌های اخیر
-python tg.py db search "movie"                # جستجو بر اساس نام/توضیحات/تگ
-python tg.py db query --tag backup --min-size 1000000   # فیلتر پیشرفته
-python tg.py db stats                         # نمایش آمار
-python tg.py db sync                          # بکاپ DB به کانال تلگرام
-python tg.py db restore                       # بازیابی DB از کانال
-python tg.py db find-orphans                  # یافتن manifest‌های خارج از DB
+python tg.py db enable                                 # فعال‌سازی دیتابیس SQLite
+python tg.py db list                                   # لیست فایل‌های اخیر
+python tg.py db search "movie"                         # جستجو بر اساس نام/توضیحات/تگ
+python tg.py db query --tag backup --min-size 1000000  # فیلتر پیشرفته
+python tg.py db stats                                  # نمایش آمار
+python tg.py db sync                                   # بکاپ DB به کانال تلگرام
+python tg.py db restore                                # بازیابی DB از کانال
+python tg.py db verify --force                         # اصلاح عدم تطابق link/id
+python tg.py db find-missing                           # بررسی وجود فایل‌های DB در کانال
+python tg.py db clear-temp                             # حذف پیام‌های موقت کانال
+python tg.py db edit 12 --desc "New description" --add-tag backup
+python tg.py db edit --ids 1,2,3 --remove-tag old
+python tg.py db find-orphans                           # اسکن کانال برای orphan
+python tg.py db orphans list                           # لیست orphan‌های یافته‌شده
+python tg.py db orphans delete --all                   # حذف گروهی
 ```
 
 ## ساختار پروژه
@@ -103,23 +184,25 @@ tg-vault/
 │   ├── __init__.py          # re-export API عمومی
 │   ├── __main__.py          # نقطه ورود python -m tg_vault
 │   ├── cli.py               # argparse CLI + main()
-│   ├── commands.py          # توابع cmd_* (upload, download, db, ...)
+│   ├── commands.py          # همه توابع cmd_*
 │   ├── interactive.py       # منوی تعاملی
 │   ├── config.py            # کلاس Config (~/.tg-vault.json)
 │   ├── bot_pool.py          # Bot + BotPool (round-robin، thread-safe)
 │   ├── uploader.py          # کلاس Uploader
 │   ├── downloader.py        # کلاس Downloader (chunk موازی)
+│   ├── download_manager.py  # مدیریت دانلود (pause/resume/cancel)
 │   ├── crypto.py            # رمزنگار AES-256-GCM (PBKDF2)
 │   ├── compression.py       # gzip هوشمند با تشخیص فرمت
 │   ├── chunk_header.py      # هدر ۴۰ بایتی خودتوصیف TGV1
 │   ├── db.py                # دیتابیس SQLite (files, chunks, tags, downloads)
 │   ├── db_sync.py           # بکاپ/بازیابی DB به کانال تلگرام
+│   ├── orphan_scanner.py    # اسکنر orphan
 │   ├── constants.py         # VERSION + محدودیت‌های API تلگرام
 │   └── utils.py             # helperها (SHA256, format_size, sanitize, ProgressTracker)
 │
 ├── gui/
 │   ├── __init__.py
-│   └── app.py               # GUI tkinter (۴ تب: آپلود/دانلود/مرور/تنظیمات)
+│   └── app.py               # GUI tkinter (۵ تب)
 │
 ├── examples/
 │   ├── backup_directory.py  # بکاپ بازگشتی دایرکتوری
@@ -138,7 +221,7 @@ tg-vault/
 │   └── TELEGRAM_LIMITS.md   # محدودیت‌های سخت/نرم Bot API
 │
 ├── tests/
-│   └── test_smoke.py        # ۱۷ تست smoke
+│   └── test_smoke.py        # تست‌های smoke
 │
 ├── README.md                # نسخه انگلیسی
 ├── README.fa.md             # این فایل

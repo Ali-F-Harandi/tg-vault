@@ -89,6 +89,26 @@ CREATE TABLE IF NOT EXISTS tags (
     UNIQUE(file_id, tag)
 );
 
+-- v8.2: orphaned messages (found in channel but not in files table)
+-- Each row = ONE individual message (a document OR a manifest text).
+CREATE TABLE IF NOT EXISTS orphans (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    msg_id          INTEGER NOT NULL,
+    channel_id      TEXT NOT NULL,
+    name            TEXT,                       -- filename (from document or parsed from manifest)
+    total_parts     INTEGER,                    -- legacy: only set for manifest orphans
+    sha256_prefix   TEXT,                       -- legacy: only set for manifest orphans
+    manifest_text   TEXT,                       -- first line of manifest (for debugging)
+    share_link      TEXT,
+    discovered_at   INTEGER NOT NULL,
+    deleted_from_telegram INTEGER DEFAULT 0,    -- 1 if deleted from Telegram (kept for history)
+    -- v8.3 columns (added via migration for existing DBs):
+    file_size       INTEGER,                    -- document.file_size in bytes (NULL for text manifests)
+    is_manifest     INTEGER DEFAULT 0,          -- 1 = manifest message, 0 = plain document
+    message_type    TEXT,                       -- 'document', 'text', 'photo', 'video', 'sticker', 'audio', 'voice', 'animation', 'video_note', 'manifest'
+    UNIQUE(channel_id, msg_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_files_sha256    ON files(sha256);
 CREATE INDEX IF NOT EXISTS idx_files_name      ON files(name);
 CREATE INDEX IF NOT EXISTS idx_files_uploaded  ON files(uploaded_at);
@@ -99,6 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_chunks_file     ON chunks(file_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_msg      ON chunks(message_id);
 CREATE INDEX IF NOT EXISTS idx_tags_tag        ON tags(tag);
 CREATE INDEX IF NOT EXISTS idx_tags_file       ON tags(file_id);
+CREATE INDEX IF NOT EXISTS idx_orphans_msg     ON orphans(channel_id, msg_id);
+CREATE INDEX IF NOT EXISTS idx_orphans_name    ON orphans(name);
 """
 
 
@@ -129,6 +151,21 @@ class Database:
     def _init_schema(self):
         with get_conn(self.path) as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn):
+        """Additive migrations — add new columns to existing tables if missing."""
+        # v8.3: add file_size and is_manifest to orphans table
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(orphans)").fetchall()}
+            if "file_size" not in cols:
+                conn.execute("ALTER TABLE orphans ADD COLUMN file_size INTEGER")
+            if "is_manifest" not in cols:
+                conn.execute("ALTER TABLE orphans ADD COLUMN is_manifest INTEGER DEFAULT 0")
+            if "message_type" not in cols:
+                conn.execute("ALTER TABLE orphans ADD COLUMN message_type TEXT")
+        except sqlite3.OperationalError:
+            pass  # table doesn't exist yet — will be created by SCHEMA
 
     # ─────────────── Files ───────────────
 
@@ -200,12 +237,56 @@ class Database:
 
             return file_id
 
-    def update_share_link(self, file_id, share_link):
+    def update_share_link(self, file_id, share_link, manifest=None):
+        """Update share_link for a file.
+
+        If manifest is provided, also update message_ids, manifest_msg_id,
+        description_msg_id, and other fields that may have changed during
+        a re-upload. This is CRITICAL — without this, the orphan scanner
+        will see the new upload's messages as orphans and delete them.
+
+        Args:
+            file_id: The file's DB row id.
+            share_link: The new share link.
+            manifest: Optional manifest dict with updated message_ids etc.
+        """
         with get_conn(self.path) as conn:
-            conn.execute(
-                "UPDATE files SET share_link=? WHERE id=?",
-                (share_link, file_id),
-            )
+            if manifest:
+                # Full update — replace all message-related fields
+                message_ids = manifest.get("message_ids", [])
+                conn.execute(
+                    """UPDATE files SET
+                       share_link=?,
+                       message_ids=?,
+                       manifest_msg_id=?,
+                       description_msg_id=?,
+                       status='uploaded',
+                       last_accessed_at=?
+                       WHERE id=?""",
+                    (
+                        share_link,
+                        json.dumps(message_ids),
+                        manifest.get("manifest_message_id"),
+                        manifest.get("description_msg_id"),
+                        int(time.time()),
+                        file_id,
+                    ),
+                )
+                # Also update chunks table
+                conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                now = int(time.time())
+                for idx, msg_id in enumerate(message_ids):
+                    conn.execute(
+                        """INSERT OR IGNORE INTO chunks
+                           (file_id, chunk_index, message_id, created_at)
+                           VALUES (?,?,?,?)""",
+                        (file_id, idx, msg_id, now),
+                    )
+            else:
+                conn.execute(
+                    "UPDATE files SET share_link=? WHERE id=?",
+                    (share_link, file_id),
+                )
 
     def get_file_by_sha(self, sha256):
         with get_conn(self.path) as conn:
@@ -503,3 +584,110 @@ class Database:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return len(data)
+
+    # ─────────────── Orphans ───────────────
+    # Orphans are manifest messages found in the channel but NOT tracked in
+    # the files table (e.g. uploaded by an older version, or upload crashed
+    # before DB insertion). They are stored locally so we don't have to
+    # re-scan the channel every time.
+
+    def upsert_orphan(self, msg_id, channel_id, name=None, total_parts=None,
+                      sha256_prefix=None, manifest_text=None, share_link=None,
+                      file_size=None, is_manifest=False, message_type=None):
+        """Insert or update an orphan record. Returns the row id.
+
+        If (channel_id, msg_id) already exists, the record is refreshed.
+        Each orphan represents ONE individual message.
+        """
+        now = int(time.time())
+        with get_conn(self.path) as conn:
+            cur = conn.execute(
+                """INSERT INTO orphans
+                   (msg_id, channel_id, name, total_parts, sha256_prefix,
+                    manifest_text, share_link, discovered_at,
+                    file_size, is_manifest, message_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(channel_id, msg_id) DO UPDATE SET
+                     name=excluded.name,
+                     total_parts=excluded.total_parts,
+                     sha256_prefix=excluded.sha256_prefix,
+                     manifest_text=excluded.manifest_text,
+                     share_link=excluded.share_link,
+                     discovered_at=excluded.discovered_at,
+                     deleted_from_telegram=0,
+                     file_size=excluded.file_size,
+                     is_manifest=excluded.is_manifest,
+                     message_type=excluded.message_type
+                """,
+                (msg_id, str(channel_id), name, total_parts,
+                 sha256_prefix, manifest_text, share_link, now,
+                 file_size, 1 if is_manifest else 0, message_type),
+            )
+            return cur.lastrowid
+
+    def list_orphans(self, include_deleted=False):
+        """Return all orphan records, newest discovery first.
+
+        Args:
+            include_deleted: if True, also return orphans that were already
+                deleted from Telegram (deleted_from_telegram=1).
+        """
+        with get_conn(self.path) as conn:
+            if include_deleted:
+                rows = conn.execute(
+                    "SELECT * FROM orphans ORDER BY discovered_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM orphans WHERE deleted_from_telegram=0 "
+                    "ORDER BY discovered_at DESC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_orphan(self, orphan_id):
+        with get_conn(self.path) as conn:
+            row = conn.execute(
+                "SELECT * FROM orphans WHERE id=?", (orphan_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_orphan_by_msg(self, channel_id, msg_id):
+        with get_conn(self.path) as conn:
+            row = conn.execute(
+                "SELECT * FROM orphans WHERE channel_id=? AND msg_id=?",
+                (str(channel_id), msg_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def mark_orphan_deleted(self, orphan_id):
+        """Mark an orphan as deleted from Telegram (keep row for history)."""
+        with get_conn(self.path) as conn:
+            conn.execute(
+                "UPDATE orphans SET deleted_from_telegram=1 WHERE id=?",
+                (orphan_id,),
+            )
+
+    def delete_orphan(self, orphan_id):
+        """Permanently delete an orphan row from the local DB."""
+        with get_conn(self.path) as conn:
+            conn.execute("DELETE FROM orphans WHERE id=?", (orphan_id,))
+
+    def clear_orphans(self, include_deleted=False):
+        """Clear orphan records. By default only clears non-deleted ones.
+
+        Returns the number of rows removed.
+        """
+        with get_conn(self.path) as conn:
+            if include_deleted:
+                cur = conn.execute("DELETE FROM orphans")
+            else:
+                cur = conn.execute(
+                    "DELETE FROM orphans WHERE deleted_from_telegram=0"
+                )
+            return cur.rowcount
+
+    def orphan_count(self):
+        with get_conn(self.path) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM orphans WHERE deleted_from_telegram=0"
+            ).fetchone()[0]

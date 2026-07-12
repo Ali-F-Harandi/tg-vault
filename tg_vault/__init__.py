@@ -60,6 +60,16 @@ from .chunk_header import (
     FLAG_COMPRESSED,
     FLAG_ENCRYPTED,
 )
+from .db_sync import (
+    auto_sync_db,
+    sync_db_to_channel,
+    restore_db_from_channel,
+    find_latest_db_backup,
+)
+from .orphan_scanner import (
+    scan_orphans,
+    delete_orphan_from_telegram,
+)
 
 __version__ = VERSION
 __author__ = "kesafatkari"
@@ -86,4 +96,8 @@ __all__ = [
     "should_skip_compression",
     "chunk_create_header", "chunk_parse_header", "is_chunk_with_header",
     "CHUNK_HEADER_SIZE", "FLAG_COMPRESSED", "FLAG_ENCRYPTED",
+    # DB sync + orphans
+    "auto_sync_db", "sync_db_to_channel", "restore_db_from_channel",
+    "find_latest_db_backup",
+    "scan_orphans", "delete_orphan_from_telegram",
 ]

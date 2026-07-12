@@ -37,10 +37,19 @@ class Config:
         channels = data.get("channels", {}) or {}
         self.main_channel = channels.get("main")
         self.temp_channel = channels.get("temp") or self.main_channel
+        # Multi-channel support: a list of additional storage channels.
+        # The main_channel is always the first/default.
+        # All channels share the same database and orphan table.
+        self.storage_channels = list(channels.get("storage", []) or [])
+        # Ensure main_channel is always in the list
+        if self.main_channel and self.main_channel not in self.storage_channels:
+            self.storage_channels.insert(0, self.main_channel)
         self.chunk_size = int(data.get("chunk_size_mb", DEFAULT_CHUNK_MB)) * 1024 * 1024
         self.upload_delay = float(data.get("upload_delay", DEFAULT_UPLOAD_DELAY))
         self.download_delay = float(data.get("download_delay", DEFAULT_DOWNLOAD_DELAY))
         self.parallel_workers = int(data.get("parallel_workers", DEFAULT_PARALLEL_WORKERS))
+        # Default manifest type: 'text' (editable), 'file' (not editable), 'auto' (text if fits)
+        self.default_manifest_type = data.get("default_manifest_type", "text")
         # Database settings
         self.db_enabled = bool(data.get("db_enabled", False))
         self.db_path = data.get("db_path")  # None → default location
@@ -58,16 +67,20 @@ class Config:
             return cls(json.load(f), path)
 
     def save(self):
+        # Build the storage list (excluding main, which is stored separately)
+        storage_list = [ch for ch in self.storage_channels if ch != self.main_channel]
         data = {
             "bots": self.bots,
             "channels": {
                 "main": self.main_channel,
                 "temp": self.temp_channel if self.temp_channel != self.main_channel else None,
+                "storage": storage_list if storage_list else None,
             },
             "chunk_size_mb": self.chunk_size // (1024 * 1024),
             "upload_delay": self.upload_delay,
             "download_delay": self.download_delay,
             "parallel_workers": self.parallel_workers,
+            "default_manifest_type": self.default_manifest_type,
             "db_enabled": self.db_enabled,
             "db_path": self.db_path,
             "db_sync_channel": self.db_sync_channel,
@@ -90,6 +103,45 @@ class Config:
                 f"chunk_size_mb too large (max {TG_FILE_SIZE_LIMIT // (1024*1024)} MB)"
             )
         return errors
+
+    # ─────────────── Multi-channel helpers ───────────────
+
+    def get_all_storage_channels(self):
+        """Return a list of all storage channel IDs.
+
+        Always includes main_channel as the first element, followed by
+        any additional channels in self.storage_channels.
+        """
+        channels = []
+        if self.main_channel:
+            channels.append(self.main_channel)
+        for ch in self.storage_channels:
+            if ch != self.main_channel and ch not in channels:
+                channels.append(ch)
+        return channels
+
+    def is_storage_channel(self, channel_id):
+        """Check if a channel ID is in the storage channels list."""
+        return channel_id in self.get_all_storage_channels()
+
+    def add_storage_channel(self, channel_id):
+        """Add a channel to the storage list. Returns True if added."""
+        if channel_id in self.storage_channels:
+            return False
+        self.storage_channels.append(channel_id)
+        return True
+
+    def remove_storage_channel(self, channel_id):
+        """Remove a channel from the storage list. Returns True if removed.
+
+        Note: main_channel cannot be removed (it's the default).
+        """
+        if channel_id == self.main_channel:
+            return False
+        if channel_id not in self.storage_channels:
+            return False
+        self.storage_channels.remove(channel_id)
+        return True
 
     # ─────────────── Database helpers ───────────────
 

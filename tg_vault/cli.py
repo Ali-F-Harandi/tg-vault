@@ -83,9 +83,9 @@ Examples:
 
     # channels
     sp = subparsers.add_parser("channels", help="Manage channels")
-    sp.add_argument("channels_action", choices=["set", "show"])
-    sp.add_argument("name", nargs="?", choices=["main", "temp"])
-    sp.add_argument("value", nargs="?")
+    sp.add_argument("channels_action", choices=["set", "show", "add", "remove"])
+    sp.add_argument("name", nargs="?", help="Channel name for 'set': main or temp")
+    sp.add_argument("value", nargs="?", help="Channel ID for 'set', 'add', or 'remove'")
 
     # upload — supports multiple files for bulk upload
     sp = subparsers.add_parser("upload", help="Upload one or more files (bulk upload supported)")
@@ -98,6 +98,13 @@ Examples:
     sp.add_argument("--password", help="Password for encryption (or set TG_VAULT_PASSWORD env var)")
     sp.add_argument("--no-compress", action="store_true",
                     help="Disable gzip compression (compression is on by default)")
+    sp.add_argument("--channel", help="Upload to a specific channel ID (default: main channel)")
+    sp.add_argument("--all-channels", action="store_true",
+                    help="Upload to ALL storage channels (file sent to each)")
+    sp.add_argument("--manifest-type", choices=["text", "file", "auto"], default=None,
+                    help="Manifest format: 'text' (editable), 'file' (not editable), "
+                         "'auto' (text if fits, file if > 4090 chars). "
+                         "Default: uses config.default_manifest_type (which defaults to 'text').")
 
     # download — supports multiple links for bulk download
     sp = subparsers.add_parser("download", help="Download one or more files (bulk download supported)")
@@ -132,9 +139,10 @@ Examples:
     sp = subparsers.add_parser("db", help="Database management")
     sp.add_argument("db_action", choices=["enable", "disable", "info", "list", "search", "stats",
                                           "export", "sync", "restore", "query", "download", "count",
-                                          "vacuum", "find", "find-orphans", "delete"],
+                                          "vacuum", "find", "find-orphans", "orphans", "delete",
+                                          "edit", "verify", "find-missing", "clear-temp"],
                     help="Action to perform")
-    sp.add_argument("query", nargs="?", help="Search query (for 'search') or file ID (for 'download')")
+    sp.add_argument("query", nargs="?", help="Search query (for 'search'), file ID (for 'download'), or orphan action (list/delete/clear/count for 'orphans')")
     sp.add_argument("--query", "-q", dest="query_opt", help="Search query (alternative, for 'search')")
     sp.add_argument("--limit", type=int, default=50, help="Max results (for 'list', 'query')")
     sp.add_argument("--output", "-o", help="Output file (for 'export')")
@@ -157,10 +165,19 @@ Examples:
     sp.add_argument("--asc", action="store_true", help="Sort ascending (default: descending)")
     sp.add_argument("--offset", type=int, default=0, help="Pagination offset")
     # Download options
-    sp.add_argument("--ids", help="Comma-separated file IDs to download (for 'download')")
-    sp.add_argument("--all-matching", action="store_true", help="Download all files matching current filter")
+    sp.add_argument("--ids", help="Comma-separated file IDs to download (for 'download'), or 'all' (for 'orphans delete'), or bulk edit (for 'edit')")
+    sp.add_argument("--all-matching", action="store_true", help="Download all files matching current filter (or delete ALL orphans)")
     sp.add_argument("--output-dir", dest="db_output_dir", default=".", help="Output directory for downloads")
-    sp.add_argument("--force", action="store_true", help="Skip confirmation (for 'delete')")
+    sp.add_argument("--force", action="store_true", help="Skip confirmation (for 'delete' / 'orphans delete')")
+    sp.add_argument("--add-tag", dest="add_tag", help="Add tag(s) to file(s) — comma-separated, for 'edit' (preserves existing tags)")
+    sp.add_argument("--remove-tag", dest="remove_tag", help="Remove tag(s) from file(s) — comma-separated, for 'edit'")
+    # Orphan scanner options (for 'find-orphans')
+    sp.add_argument("--max-scan", type=int, default=500,
+                    help="Max messages to scan for orphans (default 500, set higher for deep scans)")
+    sp.add_argument("--batch-size", type=int, default=500,
+                    help="Messages per batch for orphan scan (default 500)")
+    sp.add_argument("--delay", type=float, default=0.5,
+                    help="Seconds to pause between scan batches (default 0.5)")
 
     return parser
 

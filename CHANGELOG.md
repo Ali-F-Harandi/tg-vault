@@ -16,6 +16,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync engine (Dropbox-like folder sync, inspired by TAS)
 - FUSE mount (mount Telegram storage as a local folder, inspired by TAS)
 
+## [v8.3.0] — 2026-07-12
+
+### Added
+- **Download Manager** (`download_manager.py`) — IDM-style download management:
+  - Multiple concurrent downloads with pause/resume/cancel
+  - Downloads persist across GUI restarts (`downloads.json`)
+  - Concurrency control via semaphore (limits API calls to bot count)
+  - Temp folder (`.temp/`) for partial downloads
+  - Real-time progress, speed, and ETA display
+  - Multiselect (Ctrl+click, Shift+click) for batch operations
+  - Right-click context menu (pause/resume/cancel/remove/open folder)
+- **Multi-channel support** — upload to multiple storage channels:
+  - `channels.storage` config field for additional channels
+  - `channels add/remove/show` CLI commands
+  - `--channel` and `--all-channels` upload flags
+  - Orphan scan across ALL storage channels
+- **`db verify`** — fix share_link / manifest_msg_id mismatches
+  - Tries both manifest_msg_id and share_link to find the correct manifest
+  - Updates message_ids, manifest_msg_id, description_msg_id, share_link
+- **`db find-missing`** — check if files in DB still exist in channel
+- **`db clear-temp`** — delete all temp channel messages except DB backup
+- **`db edit`** — edit description/tags of uploaded files:
+  - Single file: `db edit <ID> --desc "..." --tag ...`
+  - Bulk edit: `db edit --ids 1,2,3 --desc "..." --tag ...`
+  - Add tags: `db edit --ids 1,2,3 --add-tag backup`
+  - Remove tags: `db edit --ids 1,2,3 --remove-tag old`
+- **Manifest type selection**:
+  - `default_manifest_type` config field (text/file/auto, default: text)
+  - `--manifest-type text|file|auto` CLI flag
+  - Compact JSON (separators=(',',':')) — ~60% smaller manifests
+- **Orphan scanner improvements**:
+  - Detects ALL message types (text, photo, video, sticker, audio, voice, etc.)
+  - `message_type` and `file_size` columns in orphans table
+  - `--max-scan`, `--batch-size`, `--delay` flags for controlled scanning
+  - Safety: share_link message_ids added to known set
+- **GUI improvements**:
+  - Right-click copy/paste context menu for all Entry and Text widgets
+  - Browse tab: Tags + Description columns, inline edit panel with bulk support
+  - Configuration tab: full config editor (bots, channels, advanced, DB, proxy)
+  - Storage channels management (add/remove/list)
+  - Status bar fixed at bottom of window
+  - Scrollable Configuration tab
+
+### Fixed
+- **CRITICAL**: `update_share_link` now updates ALL message fields (message_ids,
+  manifest_msg_id, description_msg_id) — not just share_link. Previously,
+  re-uploaded files only had share_link updated, causing the orphan scanner
+  to delete the new upload's messages.
+- **CRITICAL**: `db sync` now properly deletes old DB backup messages
+  (forwardMessage doesn't return caption for channel messages — fixed by
+  checking filename AND caption, plus direct deletion of known db_sync_msg_id)
+- `db restore` on Windows: `os.replace()` instead of `os.rename()` (FileExistsError)
+- `cmd_test` crash when no bots available (NoneType has no attribute 'request')
+- Download tree selection lost on refresh (now preserves ALL selected items)
+- Download tree crash when removing cancelled downloads
+- `ls` command printing entire JSON body instead of just hash prefix
+- GUI path resolution for `tg.py` and `config.json` after reorganization
+- Pack/grid geometry manager conflict in Configuration tab
+
 ## [v8.1.0] — 2026-07-11
 
 ### Changed — Project reorganization

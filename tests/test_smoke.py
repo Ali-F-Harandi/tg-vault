@@ -257,3 +257,90 @@ def test_password_verification_hash():
     assert h1 == h2  # deterministic
     assert Encryptor.verify_password_hash("my-password", h1) is True
     assert Encryptor.verify_password_hash("wrong-password", h1) is False
+
+
+def test_orphan_db_round_trip(tmp_path):
+    """Orphan DB upsert + list + delete should round-trip."""
+    from tg_vault.db import Database
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+
+    # Upsert two orphans
+    oid1 = db.upsert_orphan(
+        msg_id=100, channel_id=-1001234567890,
+        name="orphan1.zip", total_parts=3,
+        sha256_prefix="abc123",
+        manifest_text="TG_VAULT_MANIFEST|orphan1.zip|3|abc123",
+        share_link="https://t.me/c/1234567890/100",
+    )
+    oid2 = db.upsert_orphan(
+        msg_id=200, channel_id=-1001234567890,
+        name="orphan2.zip", total_parts=5,
+        sha256_prefix="def456",
+        manifest_text="TG_VAULT_MANIFEST|orphan2.zip|5|def456",
+        share_link="https://t.me/c/1234567890/200",
+    )
+    assert oid1 > 0 and oid2 > 0
+    assert db.orphan_count() == 2
+
+    # List
+    orphans = db.list_orphans()
+    assert len(orphans) == 2
+
+    # Upsert same orphan again (should refresh, not insert)
+    db.upsert_orphan(
+        msg_id=100, channel_id=-1001234567890,
+        name="orphan1-renamed.zip", total_parts=3,
+        sha256_prefix="abc123",
+        manifest_text="TG_VAULT_MANIFEST|orphan1-renamed.zip|3|abc123",
+        share_link="https://t.me/c/1234567890/100",
+    )
+    assert db.orphan_count() == 2  # still 2, not 3
+
+    # Lookup by msg
+    o = db.get_orphan_by_msg(-1001234567890, 100)
+    assert o is not None
+    assert o["name"] == "orphan1-renamed.zip"  # was refreshed
+
+    # Mark one deleted
+    db.mark_orphan_deleted(oid1)
+    assert db.orphan_count() == 1  # only non-deleted counted
+    orphans = db.list_orphans(include_deleted=False)
+    assert len(orphans) == 1
+    orphans_all = db.list_orphans(include_deleted=True)
+    assert len(orphans_all) == 2
+
+    # Delete permanently
+    db.delete_orphan(oid2)
+    assert db.orphan_count() == 0
+
+    # Clear remaining (the marked-deleted one)
+    n = db.clear_orphans(include_deleted=True)
+    assert n == 1
+
+
+def test_orphan_scanner_parser():
+    """The orphan scanner's manifest header parser should handle various inputs."""
+    # Import via the package
+    from tg_vault.orphan_scanner import _parse_manifest_header
+
+    # Valid text manifest header
+    result = _parse_manifest_header("TG_VAULT_MANIFEST|movie.mp4|4|abc123def456")
+    assert result is not None
+    assert result == ("movie.mp4", 4, "abc123def456")
+
+    # Valid with trailing JSON (only first line should be parsed)
+    text = "TG_VAULT_MANIFEST|movie.mp4|4|abc123def456\n{\"name\": \"movie.mp4\", ...}"
+    result = _parse_manifest_header(text)
+    assert result is not None
+    assert result == ("movie.mp4", 4, "abc123def456")
+
+    # Not a manifest
+    assert _parse_manifest_header("Hello world") is None
+    assert _parse_manifest_header("") is None
+
+    # Malformed (too few parts)
+    assert _parse_manifest_header("TG_VAULT_MANIFEST|only-two-parts") is None
+
+    # Non-integer parts count
+    assert _parse_manifest_header("TG_VAULT_MANIFEST|file.zip|not-a-number|abc123") is None

@@ -48,13 +48,16 @@ class Uploader:
         self._interrupted = False
 
     def upload(self, file_path, description="", hashtags=None, resume=False,
-               encrypt=False, password=None, compress=True):
+               encrypt=False, password=None, compress=True, manifest_type="auto"):
         """Upload file with optional description + hashtags.
 
         Args:
             encrypt: If True, encrypt chunks with AES-256-GCM using ``password``.
             password: Password for encryption (required if encrypt=True).
             compress: If True, gzip-compress chunks (skips already-compressed formats).
+            manifest_type: 'text' (force text manifest, editable), 'file' (force file
+                manifest, not editable), 'auto' (text if fits, file if too large).
+                Default 'auto'.
 
         Returns a dict with keys: share_link, manifest (full manifest dict).
         """
@@ -138,6 +141,7 @@ class Uploader:
                             password_hash=password_hash,
                             compress=any_chunk_compressed,
                             sha256_prefix=sha256_prefix,
+                            manifest_type=manifest_type,
                         )
                         if os.path.exists(resume_path):
                             os.remove(resume_path)
@@ -266,6 +270,7 @@ class Uploader:
             password_hash=password_hash,
             compress=any_chunk_compressed,
             sha256_prefix=sha256_prefix,
+            manifest_type=manifest_type,
         )
 
         # Clean up resume state
@@ -321,17 +326,21 @@ class Uploader:
                        message_ids, file_hash, desc_msg_id,
                        description, hashtags,
                        encrypt=False, encryption_salt=None, password_hash=None,
-                       compress=False, sha256_prefix=None):
-        """Send the manifest as a TEXT message (not a file).
+                       compress=False, sha256_prefix=None, manifest_type="auto"):
+        """Send the manifest as a TEXT message or FILE.
+
+        Args:
+            manifest_type: 'text' (force text), 'file' (force file), 'auto'
+                (text if fits, file if > 4090 chars). Default 'auto'.
 
         Text manifests are better because:
-        1. Can be edited later with editMessageText (update description/tags)
-        2. Faster (no file upload needed)
-        3. Smaller (no file overhead)
+          1. Can be edited later with editMessageText (update description/tags)
+          2. Faster (no file upload needed)
+          3. Smaller (no file overhead)
 
         Format:
           Line 1: TG_VAULT_MANIFEST|name|parts|sha256_prefix
-          Line 2+: JSON content
+          Line 2+: JSON content (compact, single line)
 
         Returns (share_link, manifest_dict) or (None, None).
         """
@@ -363,14 +372,26 @@ class Uploader:
             import base64
             manifest["sha256_prefix_b64"] = base64.b64encode(sha256_prefix).decode("ascii")
 
-        # Build text message: header line + JSON
+        # Build text message: header line + compact JSON
+        # Compact JSON: no indent, minimal separators → saves ~60% space
+        # Example: {"name":"file.zip","size":12345} instead of pretty-printed
         header = f"{MANIFEST_PREFIX}|{file_name}|{total_parts}|{file_hash[:16]}"
-        json_str = json.dumps(manifest, ensure_ascii=False, indent=2)
+        json_str = json.dumps(manifest, ensure_ascii=False, separators=(',', ':'))
         text = header + "\n" + json_str
 
-        # Check if text fits in Telegram's 4096 char limit
-        if len(text) > 4090:
-            # Fallback: send as file (for very large manifests with many parts)
+        # Decide: text vs file manifest
+        # - manifest_type='text': always text (will fail if > 4096 chars)
+        # - manifest_type='file': always file
+        # - manifest_type='auto': text if fits, file if > 4090 chars
+        use_file = False
+        if manifest_type == "file":
+            use_file = True
+        elif manifest_type == "auto" and len(text) > 4090:
+            use_file = True
+        # else: manifest_type == "text" or "auto" with small text → text
+
+        if use_file:
+            # Send as file manifest
             json_bytes = json_str.encode("utf-8")
             manifest_filename = sanitize_filename(f"{file_name}.manifest.json")
             bot = self.bot_pool.get_next()
@@ -383,8 +404,9 @@ class Uploader:
             if message_ids:
                 data["reply_to_message_id"] = message_ids[-1]
             res = bot.request("sendDocument", data=data, files=files)
+            manifest["manifest_type"] = "file"
         else:
-            # Send as text message (preferred)
+            # Send as text message (preferred — editable)
             bot = self.bot_pool.get_next()
             data = {
                 "chat_id": self.config.main_channel,
@@ -394,6 +416,7 @@ class Uploader:
             if message_ids:
                 data["reply_to_message_id"] = message_ids[-1]
             res = bot.request("sendMessage", data=data)
+            manifest["manifest_type"] = "text"
 
         if not res or not res.get("ok"):
             err = res.get("description") if res else "No response"
@@ -433,15 +456,21 @@ class Uploader:
         print("=" * 60)
 
     def _log_to_db(self, manifest, share_link):
-        """Insert a record into the database. Silent on errors."""
+        """Insert a record into the database. Silent on errors.
+
+        If the file already exists (same SHA256), update ALL message-related
+        fields (message_ids, manifest_msg_id, description_msg_id) — not just
+        share_link. This prevents the orphan scanner from seeing the new
+        upload's messages as orphans and deleting them.
+        """
         if not self.db:
             return
         try:
             # Check if file already exists (by SHA256)
             existing = self.db.get_file_by_sha(manifest["sha256"])
             if existing:
-                # Update share_link, status
-                self.db.update_share_link(existing["id"], share_link)
+                # CRITICAL: update ALL message-related fields, not just share_link
+                self.db.update_share_link(existing["id"], share_link, manifest=manifest)
                 return existing["id"]
             return self.db.insert_file(manifest, share_link,
                                         temp_channel=self.config.temp_channel)

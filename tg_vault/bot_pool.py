@@ -43,6 +43,11 @@ class Bot:
                 self.username = r["result"].get("username", self.username)
                 self.first_name = r["result"].get("first_name", "")
                 return True
+            else:
+                print(f"Warning: bot {self.token[:15]}... rejected: {r.get('description', '?')}")
+        except requests.exceptions.ConnectionError:
+            print(f"Warning: cannot connect to api.telegram.org for {self.token[:15]}...")
+            print("         Check your internet connection or configure a proxy in the GUI Settings tab.")
         except Exception as e:
             print(f"Warning: failed to fetch bot info for {self.token[:15]}...: {e}")
         return False

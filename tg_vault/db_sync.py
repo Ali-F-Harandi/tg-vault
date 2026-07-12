@@ -83,9 +83,24 @@ def sync_db_to_channel(config, bot_pool=None, verbose=False):
 
     deleted_count = 0
     if marker_msg_id:
+        # First: directly delete the known db_sync_msg_id (if set and different from current)
+        if config.db_sync_msg_id and config.db_sync_msg_id != marker_msg_id:
+            old_res = bot.request("deleteMessage", data={
+                "chat_id": sync_channel, "message_id": config.db_sync_msg_id,
+            })
+            if old_res and old_res.get("ok"):
+                deleted_count += 1
+                if verbose:
+                    print(f"   🗑️  Deleted old DB backup at msg {config.db_sync_msg_id}")
+
+        # Also scan backward for any other DB backup messages (in case db_sync_msg_id was stale)
         for check_id in range(marker_msg_id, max(0, marker_msg_id - 200), -1):
             if check_id == marker_msg_id:
                 continue
+            if check_id == config.db_sync_msg_id:
+                continue  # already deleted above
+            # Use copyMessage to check the caption (forwardMessage doesn't return caption
+            # for channel messages — this is a known Telegram quirk)
             fwd_res = bot.request("forwardMessage", data={
                 "chat_id": sync_channel, "from_chat_id": sync_channel,
                 "message_id": check_id, "disable_notification": True,
@@ -94,10 +109,21 @@ def sync_db_to_channel(config, bot_pool=None, verbose=False):
                 continue
             fwd_msg_id = fwd_res["result"]["message_id"]
             caption = fwd_res["result"].get("caption", "")
+            # Also check document filename for DB backups
+            doc = fwd_res["result"].get("document", {})
+            filename = doc.get("file_name", "") if doc else ""
             bot.request("deleteMessage", data={
                 "chat_id": sync_channel, "message_id": fwd_msg_id,
             })
-            if caption.startswith("TG_VAULT_DB_BACKUP") or caption.startswith("TG_VAULT_DB_MANIFEST") or caption.startswith("TG_VAULT_DB_PART"):
+            # Check if this is a DB backup message (by caption OR filename)
+            is_db_backup = (
+                caption.startswith("TG_VAULT_DB_BACKUP")
+                or caption.startswith("TG_VAULT_DB_MANIFEST")
+                or caption.startswith("TG_VAULT_DB_PART")
+                or filename.startswith("tg-vault-db-")
+                or filename.endswith(".manifest.json") and "tg-vault-db" in filename
+            )
+            if is_db_backup:
                 bot.request("deleteMessage", data={
                     "chat_id": sync_channel, "message_id": check_id,
                 })
@@ -546,10 +572,10 @@ def _do_restore_from_msg(config, bot, sync_channel, fwd_res, verbose=False):
 
         if os.path.exists(db_path):
             backup_path = db_path + ".backup"
-            os.rename(db_path, backup_path)
+            os.replace(db_path, backup_path)
             if verbose:
                 print(f"   Backed up local DB to: {backup_path}")
-        os.rename(temp_file, db_path)
+        os.replace(temp_file, db_path)
 
         if verbose:
             print(f"\n✅ Database restored from Telegram (multi-part, {total_parts} parts)!")
@@ -612,7 +638,7 @@ def _do_restore_from_msg(config, bot, sync_channel, fwd_res, verbose=False):
     db_path = config.get_db_path()
     if os.path.exists(db_path):
         backup_path = db_path + ".backup"
-        os.rename(db_path, backup_path)
+        os.replace(db_path, backup_path)
         if verbose:
             print(f"   Backed up local DB to: {backup_path}")
 
